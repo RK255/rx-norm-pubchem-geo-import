@@ -1,0 +1,91 @@
+// src/constants.ts
+
+// --- ONTOLOGY UUIDS (From ONTOLOGY.md) ---
+export const TYPE_IDS = {
+  IN: 'b1bb9b33cdd247dfaf02ad98506c39eb',
+  BN: '402cae0b9c17472586a2236f70492d7b',
+  DF: '06e2222273114885b32b3a1368d2d266',
+  SBD: '2033a9f3942a4c828dcdfe0411609450',
+  SCD: 'a844e0f3a48d4e82b234da893aee4291',
+  MIN: 'f0250a1cc9e8431980b3e9d7661e08f9',
+  PIN: '4ba36be2740b4f36aa7c31512869bb3c',
+} as const;
+
+export const PROP_IDS = {
+  RXCUI: 'e6c50e227460442cab646a48f235459a',
+  BRAND_NAMES: '3f30135c25394a0bb6ae429ef87337e1',
+  DOSE_FORMS: '88a39df4de3542b8a6b0155750617b76',
+  SEMANTIC_BRANDED_DRUGS: 'da89d8e2f052468f92ae5e8557ff1e78',
+  SEMANTIC_CLINICAL_DRUGS: 'c1617a1e32844adeb5ff4c4445dc2ba6',
+  MULTIPLE_INGREDIENTS: 'e8885ee2b8674952b2538ad4eee058e2',
+  PRECISE_INGREDIENTS: '5d5602ac0fe64f4dbdc345c0bdf09d72',
+} as const;
+
+// --- SOURCE DATA MAP (IDs found in rxnorm_entities_enriched.jsonl) ---
+export const SOURCE_DATA_IDS = {
+  TTY: 'fd0c76eae47c55bbac4cca96203752c1',
+  RXCUI: 'c6f36f8a8e22546ea7618ac008d2f91e',
+  NAME: 'a126ca530c8e48d5b88882c734c38935',
+  
+  // PubChem Property IDs
+  SMILES: '07bc332f2afd4e498d868f4e85ec5cc1', 
+  INCHI_KEY: '93d0ecbc41df4c668d2fb16172002dcb',
+  PMID: '1577e86142964c9484c92cf079e330e1',
+  CID: 'bdd863e095365bbea65deae8ebf1e81b',
+  IUPAC: '5fbf742a110d508abc9af6a1cd1e49e7',
+  FORMULA: '20aba01a611d57e1bb02ca665dd61acd',
+} as const;
+
+// --- RELATIONSHIP IDS (From extract_for_geo_import.py) ---
+export const REL_IDS = {
+  HAS_FORM: '3df206ec784d51c5a1bf724192b70a95',
+  FORM_OF: 'd3077c62a9875bfbace8602b42872f43',
+  HAS_INGREDIENT: 'd085f236da3c51fca583c72e7058973b',
+  INGREDIENT_OF: '708910ff645b507ab5616dbd680b5802',
+  PRECISE_INGREDIENT_OF: '9147c85a51ea5a2481824d2aefe5956d',
+  HAS_PRECISE_INGREDIENT: '307907247a3c5be682ed242bb61a2947',
+  HAS_TRADENAME: 'a42836a8c04757e1a995531b8ff3200b',
+  TRADENAME_OF: 'dbc766b554f0579da4c7b7c29924d6a3',
+  CONSISTS_OF: '88c43b5be4eb5fe78b09872e9a9c3c70',
+  CONSTITUTES: 'f5e289c3d13a5aaaa38b22448f7e38ab',
+  IN_TO_MIN: '1df119c2ba785c688aafd35556e3fab6',
+  MIN_TO_SCD: 'f44019f93b2258119d1022c4f39b9da5',
+  SCDG_SCDF_TO_SCD: 'dd9264e954d650f98f97cc5d471e5a51',
+  DF_TO_SCD: 'cbf90e604bf458719df7ad10fd90c07f',
+  SCD_TO_SCDG_TMSY: '12a84f5c305857b782821609c5e2b59b',
+  DFG_TO_SCDG: 'b74d6b2005505263a22c10fe0ed1f591',
+} as const;
+
+// --- RXNorm Term Types ---
+export const ALLOWED_TTYS = [
+  'PIN',
+  'IN',
+  'MIN',
+  'SCDC',
+  'SCDF',
+  'SCDG',
+  'SBDC',
+  'SBDF',
+  'BN',
+  'SCD',
+  'SBD',
+  'GPCK',
+  'BPCK',
+  'DF'
+];
+
+export const BLOCKED_TTYS = [
+  'TMSY',
+  'PSN',
+  'SY'
+];
+
+export const TARGET_TTYS = [
+  'IN',
+  'SCD',
+  'SBD',
+  'BN',
+  'DF',
+  'PIN',
+  'MIN'
+];

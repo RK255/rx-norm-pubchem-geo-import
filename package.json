@@ -1,0 +1,22 @@
+{
+  "name": "pharma-graph-ingestor",
+  "version": "1.0.0",
+  "description": "Ingests RxNorm pharma data into the Geo Knowledge Graph.",
+  "type": "module",
+  "scripts": {
+    "publish": "tsx src/02_publish.ts",
+    "delete": "tsx src/03_delete.ts",
+    "validate": "tsx src/01_validate.ts"
+  },
+  "dependencies": {
+    "@geoprotocol/geo-sdk": "0.17.0",
+    "dotenv": "16.4.0",
+    "fs-extra": "^11.3.4",
+    "viem": "2.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "20.0.0",
+    "tsx": "4.21.0",
+    "typescript": "6.0.2"
+  }
+}
