@@ -97,7 +97,6 @@ Map RxNorm TTY (Term Type) entities and their relationships to the specific Geo 
 
 ### Type: Brand Name (BN)
 *   Has Property: RxCUI
-*   Has Relation: Semantic Branded Drugs (SBD)
 
 ### Type: Dose Form (DF)
 *   Has Property: RxCUI
