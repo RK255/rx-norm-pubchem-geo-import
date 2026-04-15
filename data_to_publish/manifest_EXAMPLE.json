@@ -1,0 +1,13 @@
+{
+  "timestamp": "2026-04-15T12:00:00.000Z",
+  "batchName": "Import Limit 10 (Connected Only)",
+  "spaceId": "your_space_id_here",
+  "entityIds": [
+    "uuid-example-1",
+    "uuid-example-2",
+    "..."
+  ],
+  "entityCount": 555,
+  "opsCount": 1670,
+  "skippedCount": 0
+}

@@ -1,0 +1,25 @@
+============================================================
+ENTITY BREAKDOWN
+============================================================
+  Semantic Clinical Drug: 268
+  Semantic Brand Drug: 119
+  Brand: 74
+  Multiple Ingredient: 64
+  Dose Form: 17
+  Ingredient: 8
+  Precise Ingredient: 5
+
+============================================================
+SUMMARY
+============================================================
+  Total Entities: 555
+  Total Relations: 560
+  Source Ingredients: 8
+
+============================================================
+SAMPLE ENTITIES (First 10)
+============================================================
+  1. mercaptopurine [Ingredient] (RxCUI: 103, Relations: 7)
+  2. mercaptopurine 50 MG Oral Tablet [Semantic Clinical Drug] (RxCUI: 197931, Relations: 0)
+  3. Purixan [Brand] (RxCUI: 1536485, Relations: 0)
+  ... (truncated for example)

@@ -7,6 +7,9 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Generated output files
-data_to_publish/*.json
-data_to_publish/*.txt
+# Generated output files (keep examples)
+data_to_publish/dry_run_summary_[0-9]*.txt
+data_to_publish/manifest_[0-9]*.json
+data_to_publish/dry_run_ops_*.json
+data_to_publish/extracted_data_ops.txt
+data_to_publish/full_geo_extraction.json
