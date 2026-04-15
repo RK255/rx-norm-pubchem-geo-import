@@ -27,6 +27,7 @@ if (limitArgIndex !== -1 && args[limitArgIndex + 1]) {
 }
 
 const FORCE_PUBLISH = args.includes('--force'); // Skip deduplication if present
+const CONNECTED_ONLY = args.includes('--connected-only'); // Filter orphans (Issue #11)
 
 // --- CONFIGURATION ---
 const DATA_DIR = path.join(__dirname, '..', 'data_to_publish');
@@ -44,7 +45,6 @@ interface Entity {
 }
 
 // --- PRE-FLIGHT CHECK (DEDUPLICATION FIX) ---
-// Fetches existing entity IDs to prevent duplicates.
 async function fetchExistingEntityIds(spaceId: string): Promise<Set<string>> {
   console.log(`🔍 Pre-flight check: Fetching existing entities...`);
   const existingIds = new Set<string>();
@@ -78,6 +78,7 @@ async function fetchExistingEntityIds(spaceId: string): Promise<Set<string>> {
 async function runImport() {
   console.log(`🚀 Starting Import${INGREDIENT_LIMIT ? ` (Limit: ${INGREDIENT_LIMIT})` : ' (All Data)'}...`);
   if (FORCE_PUBLISH) console.warn('⚠️  --force flag detected: Skipping existence check!');
+  if (CONNECTED_ONLY) console.log('🧹 --connected-only flag detected: Filtering isolated ingredients.');
 
   // 1. Init Environment
   const privateKeyRaw = process.env.GEO_WALLET_PRIVATE_KEY;
@@ -86,7 +87,7 @@ async function runImport() {
     console.error('❌ Missing GEO_WALLET_PRIVATE_KEY or GEO_SPACE_ID in .env');
     process.exit(1);
   }
-  const privateKey = privateKeyRaw.startsWith('0x') ? privateKeyRaw as Hex : `0x${privateKeyRaw}` as Hex; // FIX: Explicit Hex type
+  const privateKey = privateKeyRaw.startsWith('0x') ? privateKeyRaw as Hex : `0x${privateKeyRaw}` as Hex;
   const smartAccount = await getSmartAccountWalletClient({ privateKey });
   console.log('✅ Smart Account Initialized.');
 
@@ -103,12 +104,25 @@ async function runImport() {
   console.log(`📦 Loaded ${allIngredients.length} total ingredients from Master.`);
 
   // 4. Slice Data
-  const ingredientsToImport = INGREDIENT_LIMIT ? allIngredients.slice(0, INGREDIENT_LIMIT) : allIngredients;
+  let ingredientsToImport = INGREDIENT_LIMIT ? allIngredients.slice(0, INGREDIENT_LIMIT) : allIngredients;
+
+  // --- FILTER LOGIC (Issue #11) ---
+  if (CONNECTED_ONLY) {
+    const originalCount = ingredientsToImport.length;
+    ingredientsToImport = ingredientsToImport.filter((ing: any) => {
+      const conns = ing.connections || {};
+      // Check if ANY connection array has items
+      return Object.values(conns).some((arr: any) => Array.isArray(arr) && arr.length > 0);
+    });
+    const filteredCount = originalCount - ingredientsToImport.length;
+    console.log(`🧹 Filtered out ${filteredCount} isolated ingredients (--connected-only active).`);
+  }
+  // ----------------------------------
+
   console.log(`🧪 Isolated ${ingredientsToImport.length} ingredients for import.\n`);
 
   // 5. Expand Ingredients -> All Entities (Ingredients + Brands + Forms + Drugs)
   const entityMap = new Map<string, Entity>();
-  const crypto = await import('crypto');
   
   function generateUuid(rxcui: string, typeId: string): string {
     const seed = `${typeId}:${rxcui}`;
@@ -188,7 +202,7 @@ async function runImport() {
     // FIX: Deduplication Check (Normalize ID to match API format)
     const normalizedId = entity.id.replace(/-/g, '');
     if (existingIds.has(normalizedId)) {
-      return; // Skip silently or log count later
+      return; // Skip silently
     }
     
     existingIds.add(normalizedId); // Mark as seen in this run
@@ -232,7 +246,7 @@ async function runImport() {
   const manifestPath = path.join(DATA_DIR, `manifest_${Date.now()}.json`);
   fs.writeFileSync(manifestPath, JSON.stringify({
     timestamp: new Date().toISOString(),
-    batchName: `Import Limit ${INGREDIENT_LIMIT || 'ALL'}`,
+    batchName: `Import ${INGREDIENT_LIMIT ? `Limit ${INGREDIENT_LIMIT}` : 'All'}${CONNECTED_ONLY ? ' (Connected Only)' : ''}`,
     spaceId: spaceId,
     entityIds: allEntities.map(e => e.id)
   }, null, 2));
@@ -246,7 +260,7 @@ async function runImport() {
   console.log(`🚀 Publishing operations to Geo...`);
   try {
     const { cid, editId, to, calldata } = await personalSpace.publishEdit({
-      name: `Import ${INGREDIENT_LIMIT ? `(Limit ${INGREDIENT_LIMIT})` : '(All)'}`,
+      name: `Import ${INGREDIENT_LIMIT ? `(Limit ${INGREDIENT_LIMIT})` : '(All)'}${CONNECTED_ONLY ? ' [Connected Only]' : ''}`,
       spaceId,
       ops: allOps,
       author: spaceId,

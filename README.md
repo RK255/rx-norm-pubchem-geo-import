@@ -19,7 +19,7 @@ The import is a surgical extraction of US-marketed chemicals, filtering the full
 
 **Data Totals:**
 
-*   **Ingredients (IN)**: 2,893
+*   **Ingredients (IN)**: 2,893 (1,790 w/ --connected-only)
 *   **Semantic Clinical Drugs (SCD)**: 13,606
 *   **Semantic Branded Drugs (SBD)**: 8,777
 *   **Brand Names (BN)**: 5,025
@@ -30,7 +30,43 @@ The import is a surgical extraction of US-marketed chemicals, filtering the full
 **Enrichment:**
 - **PubChem Integration**: All 2,893 Ingredients are enriched with PubChem CIDs, SMILES, InChIKeys, and PMIDs.
 
-**Scripts**
-bun run import → src/import_extracted_data.ts – Ingests data with auto-deduplication.
-bun run rollback → src/rollback_selective.ts – Reverts a specific batch safely.
-bun run clean_all → src/clean_pharma_types.ts – Clears Pharma entities.
+## Scripts
+
+### `bun run import`
+**Source:** `src/import_extracted_data.ts`
+
+Ingests RxNorm data into Geo with auto-deduplication.
+
+**Flags:**
+- `--limit N` – Process only the first N ingredients (useful for testing).
+- `--connected-only` – Filter out isolated ingredients (38%) that have no clinical relations (products, brands, dose forms). This reduces the dataset from 2,893 to ~1,790 ingredients with full connectivity.
+- `--force` – Skip deduplication check and publish regardless of existing entities.
+
+**Examples:**
+
+bun run import                          # Import all 2,893 ingredients
+bun run import --connected-only         # Import only ~1,790 connected ingredients
+bun run import --limit 50              # Test with first 50 ingredients
+bun run import --limit 10 --force       # Force import 10 (skip dedup check)
+
+
+### `bun run rollback`
+
+**Source:** `src/rollback_selective.ts`
+
+Reverts a specific batch safely using its manifest file.
+
+Usage:
+
+bun run rollback --file data_to_publish/manifest_123456789.json
+
+### `bun run clean_all`
+
+**Source:** `src/clean_pharma_types.ts`
+
+Clears all Pharma entities from the space using RxCUI fingerprint detection.
+
+Usage:
+
+bun run clean_all
+
