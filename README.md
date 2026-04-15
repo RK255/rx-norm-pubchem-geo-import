@@ -38,17 +38,18 @@ The import is a surgical extraction of US-marketed chemicals, filtering the full
 Ingests RxNorm data into Geo with auto-deduplication.
 
 **Flags:**
-- `--limit N` – Process only the first N ingredients (useful for testing).
-- `--connected-only` – Filter out isolated ingredients (38%) that have no clinical relations (products, brands, dose forms). This reduces the dataset from 2,893 to ~1,790 ingredients with full connectivity.
-- `--force` – Skip deduplication check and publish regardless of existing entities.
+- `--limit N` – Process only the first N ingredients.
+- `--connected-only` – Filter out isolated ingredients (38%).
+- `--dry-run` – Generate operations and save files without publishing to blockchain.
+- `--force` – Skip deduplication check.
 
 **Examples:**
 
 bun run import                          # Import all 2,893 ingredients
 bun run import --connected-only         # Import only ~1,790 connected ingredients
-bun run import --limit 50              # Test with first 50 ingredients
+bun run import --limit 50               # Test with first 50 ingredients
 bun run import --limit 10 --force       # Force import 10 (skip dedup check)
-
+bun run import --dry-run                # Preview import
 
 ### `bun run rollback`
 
@@ -58,7 +59,7 @@ Reverts a specific batch safely using its manifest file.
 
 Usage:
 
-bun run rollback --file data_to_publish/manifest_123456789.json
+bun run rollback <path_to_manifest.json>
 
 ### `bun run clean_all`
 

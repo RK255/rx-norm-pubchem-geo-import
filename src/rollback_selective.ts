@@ -1,5 +1,5 @@
 // src/rollback_selective.ts
-import 'dotenv/config'; // Load .env
+import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -10,159 +10,164 @@ import type { Hex } from 'viem';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// --- GQL HELPER ---
+// --- ARGUMENT PARSING (Positional) ---
+const args = process.argv.slice(2);
+if (args.length === 0) {
+  console.error('❌ Usage: bun run rollback <path_to_manifest.json>');
+  console.error('   Example: bun run rollback data_to_publish/manifest_1776227282813.json');
+  process.exit(1);
+}
+
+let manifestPath = args[0];
+
+// Resolve relative path from project root
+if (!path.isAbsolute(manifestPath)) {
+  manifestPath = path.join(__dirname, '..', manifestPath);
+}
+
+// --- CONFIGURATION ---
 const API_URL = "https://testnet-api.geobrowser.io/graphql";
 
+// --- GQL HELPER ---
 async function queryGeo(query: string) {
-  const res = await fetch(API_URL, { 
-    method: "POST", 
-    headers: { "Content-Type": "application/json" }, 
-    body: JSON.stringify({ query }) 
+  const res = await fetch(API_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query }),
   });
-  const json = await res.json() as { errors?: any[]; data?: any }; // FIX: Type assertion
-  if (json.errors) throw new Error(json.errors[0].message);
+  const json = await res.json() as { errors?: any[]; data?: any };
+  if (json.errors) {
+    const err = json.errors[0];
+    throw new Error(err.message || JSON.stringify(err));
+  }
   return json.data;
 }
 
 async function runRollback() {
-  // 1. Get Manifest Path from arguments
-  const args = process.argv.slice(2);
-  if (args.length === 0) {
-    console.error('❌ Usage: bun run src/rollback_selective.ts <path_to_manifest.json>');
-    console.error('   Example: bun run src/rollback_selective.ts ./data_to_publish/manifest_1715432101234.json');
-    process.exit(1);
-  }
-
-  const manifestPath = args[0];
-
+  // 1. Load Manifest
   if (!fs.existsSync(manifestPath)) {
     console.error(`❌ Manifest file not found: ${manifestPath}`);
     process.exit(1);
   }
 
-  // 2. Load Manifest
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-  const targetIds = manifest.entityIds;
-  const spaceId = manifest.spaceId;
+  const { spaceId: manifestSpaceId, entityIds, batchName } = manifest;
 
-  console.log(`🚀 Starting Selective Rollback...`);
-  console.log(`📋 Manifest: ${manifest.batchName}`);
-  console.log(`📍 Target Space: ${spaceId}`);
-  console.log(`🎯 Targeting ${targetIds.length} entities.`);
-
-  // 3. Initialize Wallet (Using ENV vars from .env)
-  const privateKeyRaw = process.env.GEO_WALLET_PRIVATE_KEY;
-  if (!privateKeyRaw) {
-    console.error('❌ Missing GEO_WALLET_PRIVATE_KEY in .env');
+  // 2. Validate Environment
+  const envSpaceId = process.env.GEO_SPACE_ID;
+  if (!envSpaceId) {
+    console.error('❌ GEO_SPACE_ID not found in .env');
     process.exit(1);
   }
-  const privateKey: Hex = privateKeyRaw.startsWith('0x') ? privateKeyRaw as Hex : `0x${privateKeyRaw}` as Hex; // FIX: Explicit Hex type
-  const smartAccount = await getSmartAccountWalletClient({ privateKey });
-  console.log('✅ Smart Account Initialized.');
 
-  // 4. Fetch Data for Targeted Entities
-  console.log('📡 Fetching current state from Geo API...');
-  
-  // A. Fetch Values (filtering by the specific entity IDs)
-  // We convert the array of IDs to a GraphQL list string: ["id1", "id2", ...]
-  const idsString = JSON.stringify(targetIds);
+  // SAFETY CHECK
+  if (manifestSpaceId !== envSpaceId) {
+    console.error(`❌ Space ID Mismatch!`);
+    console.error(`   Manifest Space: ${manifestSpaceId}`);
+    console.error(`   .env Space:      ${envSpaceId}`);
+    console.error(`   Aborting to prevent data loss.`);
+    process.exit(1);
+  }
+
+  console.log(`🧹 Starting Rollback for Batch: ${batchName}`);
+  console.log(`🎯 Target Entities: ${entityIds.length}`);
+
+  // Validate entity IDs
+  const validEntityIds = entityIds.filter((id: string) => id && typeof id === 'string' && id.trim() !== '');
+  console.log(`   ✅ Valid entity IDs: ${validEntityIds.length}`);
+
+  if (validEntityIds.length === 0) {
+    console.log('✅ No entities listed in manifest. Nothing to do.');
+    return;
+  }
+
+  // 3. Fetch Current State
+  console.log(`📡 Fetching current data on-chain...`);
 
   const valuesQuery = `
     query GetValues {
-      values(filter: { 
-        spaceId: { is: "${spaceId}" },
-        entityId: { in: ${idsString} }
-      }) {
+      values(filter: { spaceId: { is: "${envSpaceId}" }, entityId: { in: ${JSON.stringify(validEntityIds)} } }) {
         entityId
         propertyId
       }
     }
   `;
+  const valuesData = await queryGeo(valuesQuery);
+  const values = valuesData.values || [];
 
-  // B. Fetch Relations (We fetch all and filter locally to be safe)
   const relationsQuery = `
     query GetRelations {
-      relations(filter: { spaceId: { is: "${spaceId}" } }) {
+      relations(filter: { spaceId: { is: "${envSpaceId}" }, fromEntityId: { in: ${JSON.stringify(validEntityIds)} } }) {
         id
-        fromEntityId
       }
     }
   `;
+  const relationsData = await queryGeo(relationsQuery);
+  const relations = relationsData.relations || [];
 
-  const [valuesData, relationsData] = await Promise.all([
-    queryGeo(valuesQuery),
-    queryGeo(relationsQuery)
-  ]);
+  console.log(`   📦 Found ${values.length} values and ${relations.length} relations to delete.`);
 
-  const values = valuesData.values || [];
-  const allRelations = relationsData.relations || [];
+  // 4. Generate Deletion ops
+  const allOps: any[] = [];
 
-  // Filter relations: keep only if the 'fromEntityId' is in our target list
-  const relations = allRelations.filter((r: any) => targetIds.includes(r.fromEntityId));
+  // A. Unset Values
+  const entityValueMap = new Map<string, Set<string>>();
+  values.forEach((v: any) => {
+    if (!entityValueMap.has(v.entityId)) entityValueMap.set(v.entityId, new Set());
+    entityValueMap.get(v.entityId)!.add(v.propertyId);
+  });
 
-  console.log(`📊 Found ${values.length} values and ${relations.length} relations to delete.`);
+  entityValueMap.forEach((props, id) => {
+    try {
+      const result = Graph.updateEntity({ id, unset: Array.from(props).map(p => ({ property: p })) });
+      if (result?.ops) allOps.push(...result.ops);
+    } catch (e: any) {
+      console.error(`   ⚠️  Failed to unset values for ${id}: ${e.message}`);
+    }
+  });
 
-  if (values.length === 0 && relations.length === 0) {
-    console.log('✅ Nothing found to delete. These entities may already be gone.');
+  // B. Delete Relations
+  relations.forEach((r: any) => {
+    try {
+      const result = Graph.deleteRelation({ id: r.id });
+      if (result?.ops) allOps.push(...result.ops);
+    } catch (e: any) {
+      console.error(`   ⚠️  Failed to delete relation ${r.id}: ${e.message}`);
+    }
+  });
+
+  // NOTE: Entities are not explicitly deleted - they become empty shells
+  // after all their properties and relations are removed.
+  // Future imports can reuse these IDs via the deduplication check.
+
+  console.log(`📊 Generated ${allOps.length} deletion operations.`);
+  console.log(`   (Entities will remain as empty shells - this is expected behavior)`);
+
+  if (allOps.length === 0) {
+    console.log('✅ No active data found on-chain. Rollback complete.');
     return;
   }
 
-  // 5. Generate Delete Ops
-  const ops: any[] = [];
+  // 5. Publish
+  console.log(`🚀 Publishing Rollback...`);
+  const privateKeyRaw = process.env.GEO_WALLET_PRIVATE_KEY;
+  if (!privateKeyRaw) throw new Error("Missing private key");
+  const privateKey = privateKeyRaw.startsWith('0x') ? privateKeyRaw as Hex : `0x${privateKeyRaw}` as Hex;
+  const smartAccount = await getSmartAccountWalletClient({ privateKey });
 
-  // A. Unset Values
-  const entityMap = new Map<string, Set<string>>();
-  for (const v of values) {
-    if (!entityMap.has(v.entityId)) entityMap.set(v.entityId, new Set());
-    entityMap.get(v.entityId)!.add(v.propertyId);
-  }
+  const { cid, editId, to, calldata } = await personalSpace.publishEdit({
+    name: `Rollback: ${batchName}`,
+    spaceId: envSpaceId,
+    ops: allOps,
+    author: envSpaceId,
+    network: "TESTNET",
+  });
 
-  for (const [entityId, propertySet] of entityMap.entries()) {
-    const propertiesToUnset = Array.from(propertySet).map(p => ({ property: p }));
-    try {
-      const result = Graph.updateEntity({ id: entityId, unset: propertiesToUnset });
-      ops.push(...result.ops);
-    } catch (e) {
-      console.error(`Failed to unset entity ${entityId}:`, e);
-    }
-  }
+  console.log(`📝 IPFS CID: ${cid}`);
+  console.log(`🆔 Edit ID: ${editId}`);
 
-  // B. Delete Relations
-  for (const r of relations) {
-    try {
-      const result = Graph.deleteRelation({ id: r.id });
-      ops.push(...result.ops);
-    } catch (e) {
-      console.error(`Failed to delete relation ${r.id}:`, e);
-    }
-  }
-
-  console.log(`📝 Generated ${ops.length} delete operations.`);
-
-  // 6. Publish
-  console.log(`💣 Publishing Rollback to TESTNET...`);
-  try {
-    const { cid, editId, to, calldata } = await personalSpace.publishEdit({
-      name: `Rollback: ${manifest.batchName}`,
-      spaceId: spaceId,
-      ops: ops,
-      author: spaceId, // Author is the space itself for personal spaces
-      network: "TESTNET",
-    });
-
-    console.log(`📝 IPFS CID: ${cid}`);
-    console.log(`🆔 Edit ID: ${editId}`);
-    console.log(`📬 Target: ${to}`);
-
-    const txHash = await smartAccount.sendTransaction({
-      to,
-      data: calldata,
-    });
-
-    console.log(`✅ Rollback Complete. TX: ${txHash}`);
-  } catch (e) {
-    console.error('❌ Publish failed:', e);
-  }
+  const txHash = await smartAccount.sendTransaction({ to, data: calldata });
+  console.log(`\n✅ Rollback Complete. TX: ${txHash}`);
 }
 
 runRollback().catch(console.error);
