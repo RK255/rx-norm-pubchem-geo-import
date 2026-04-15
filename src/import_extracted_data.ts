@@ -6,7 +6,7 @@ import crypto from 'crypto';
 import readline from 'readline';
 import { fileURLToPath } from 'url';
 import { Graph, personalSpace, getSmartAccountWalletClient } from '@geoprotocol/geo-sdk';
-import { TYPE_IDS, SOURCE_DATA_IDS } from './constants';
+import { TYPE_IDS, RELATION_IDS, PROPERTY_IDS } from './constants';
 import type { Hex } from 'viem';
 
 // --- ESM __dirname POLYFIX ---
@@ -42,6 +42,9 @@ interface Entity {
   rxcui: string;
   name: string;
   relations: { [key: string]: any };
+  SMILES?: string;
+  PMID?: string;
+  INCHIKEY?: string;
   [key: string]: any;
 }
 
@@ -56,11 +59,31 @@ const TYPE_NAMES: Record<string, string> = {
   [TYPE_IDS.PIN]: 'Precise Ingredient',
 };
 
+// --- TTY TO TYPE/RELATION MAPPINGS ---
+const TTY_TO_TYPE_ID: { [key: string]: string } = {
+  'in': TYPE_IDS.IN,
+  'bn': TYPE_IDS.BN,
+  'df': TYPE_IDS.DF,
+  'sbd': TYPE_IDS.SBD,
+  'scd': TYPE_IDS.SCD,
+  'min': TYPE_IDS.MIN,
+  'pin': TYPE_IDS.PIN,
+};
+
+const TTY_TO_RELATION_ID: { [key: string]: string } = {
+  'scd': RELATION_IDS.SEMANTIC_CLINICAL_DRUGS,
+  'sbd': RELATION_IDS.SEMANTIC_BRANDED_DRUGS,
+  'bn': RELATION_IDS.BRAND_NAMES,
+  'min': RELATION_IDS.MULTIPLE_INGREDIENTS,
+  'pin': RELATION_IDS.PRECISE_INGREDIENTS,
+  'df': RELATION_IDS.DOSE_FORMS,
+};
+
 // --- PRE-FLIGHT CHECK ---
 async function fetchExistingEntityIds(spaceId: string): Promise<Set<string>> {
   console.log(`🔍 Pre-flight check: Fetching existing entities...`);
   const existingIds = new Set<string>();
-  const RX_CUI_PROPERTY_ID = 'e6c50e227460442cab646a48f235459a';
+  const RX_CUI_PROPERTY_ID = PROPERTY_IDS.RXCUI;
 
   try {
     const query = `
@@ -101,7 +124,7 @@ async function confirmPublish(): Promise<boolean> {
 }
 
 // --- GENERATE HUMAN-READABLE SUMMARY ---
-function generateSummary(entities: Entity[], ingredients: any[]): string {
+function generateSummary(entities: Entity[], ingredients: Entity[]): string {
   const lines: string[] = [];
   
   // Count by type
@@ -152,6 +175,22 @@ function generateSummary(entities: Entity[], ingredients: any[]): string {
   }
 
   return lines.join('\n');
+}
+
+// --- UUID GENERATION ---
+function generateUuid(rxcui: string, typeId: string): string {
+  const seed = `${typeId}:${rxcui}`;
+  const hash = crypto.createHash('sha256').update(seed).digest('hex');
+  return [hash.substring(0, 8), hash.substring(8, 12), hash.substring(12, 16), hash.substring(16, 20), hash.substring(20, 32)].join('-');
+}
+
+// --- ENTITY LOOKUP ---
+function getEntity(id: string, typeId: string, rxcui: string, name: string, entityMap: Map<string, Entity>): Entity {
+  if (!entityMap.has(id)) {
+    const entity: Entity = { id, typeId, rxcui, name, relations: {} };
+    entityMap.set(id, entity);
+  }
+  return entityMap.get(id)!;
 }
 
 async function runImport() {
@@ -214,48 +253,17 @@ async function runImport() {
 
   // 6. Expand Ingredients -> All Entities
   const entityMap = new Map<string, Entity>();
-  
-  function generateUuid(rxcui: string, typeId: string): string {
-    const seed = `${typeId}:${rxcui}`;
-    const hash = crypto.createHash('sha256').update(seed).digest('hex');
-    return [hash.substring(0, 8), hash.substring(8, 12), hash.substring(12, 16), hash.substring(16, 20), hash.substring(20, 32)].join('-');
-  }
-
-  const TTY_TO_TYPE_ID: { [key: string]: string } = {
-    'in': 'b1bb9b33cdd247dfaf02ad98506c39eb',
-    'bn': '402cae0b9c17472586a2236f70492d7b',
-    'df': '06e2222273114885b32b3a1368d2d266',
-    'sbd': '2033a9f3942a4c828dcdfe0411609450',
-    'scd': 'a844e0f3a48d4e82b234da893aee4291',
-    'min': 'f0250a1cc9e8431980b3e9d7661e08f9',
-    'pin': '4ba36be2740b4f36aa7c31512869bb3c',
-  };
-
-  const TTY_TO_RELATION_ID: { [key: string]: string } = {
-    'scd': 'c1617a1e32844adeb5ff4c4445dc2ba6',
-    'sbd': 'da89d8e2f052468f92ae5e8557ff1e78',
-    'bn': '3f30135c25394a0bb6ae429ef87337e1',
-    'min': 'e8885ee2b8674952b2538ad4eee058e2',
-    'pin': '5d5602ac0fe64f4dbdc345c0bdf09d72',
-    'df': '88a39df4de3542b8a6b0155750617b76',
-  };
-
-  function getEntity(id: string, typeId: string, rxcui: string, name: string): Entity {
-    if (!entityMap.has(id)) {
-      const entity: Entity = { id, typeId, rxcui, name, relations: {} };
-      entityMap.set(id, entity);
-    }
-    return entityMap.get(id)!;
-  }
 
   ingredientsToImport.forEach((ing) => {
-    const ingId = generateUuid(ing.rxcui, TTY_TO_TYPE_ID['in']);
-    const ingEntity = getEntity(ingId, TTY_TO_TYPE_ID['in'], ing.rxcui, ing.name);
+    const ingId = generateUuid(ing.rxcui, TYPE_IDS.IN);
+    const ingEntity = getEntity(ingId, TYPE_IDS.IN, ing.rxcui, ing.name, entityMap);
     
-    if ((ing as any).smiles) ingEntity.SMILES = (ing as any).smiles;
-    if ((ing as any).pmid) ingEntity.PMID = (ing as any).pmid;
-    if ((ing as any).inchi_key) ingEntity.INCHIKEY = (ing as any).inchi_key;
+    // Add PubChem properties to ingredient entities
+    if (ing.SMILES) ingEntity.SMILES = ing.SMILES;
+    if (ing.PMID) ingEntity.PMID = ing.PMID;
+    if (ing.INCHIKEY) ingEntity.INCHIKEY = ing.INCHIKEY;
 
+    // Process connections
     const connections = (ing as any).connections || {};
     Object.entries(connections).forEach(([tty, connList]) => {
       if (!Array.isArray(connList) || connList.length === 0) return;
@@ -266,7 +274,7 @@ async function runImport() {
       if (!ingEntity.relations[relationId]) ingEntity.relations[relationId] = [];
       connList.forEach((conn: any) => {
         const connId = generateUuid(conn.rxcui, relatedTypeId);
-        getEntity(connId, relatedTypeId, conn.rxcui, conn.name);
+        getEntity(connId, relatedTypeId, conn.rxcui, conn.name, entityMap);
         (ingEntity.relations[relationId] as string[]).push(connId);
       });
     });
@@ -275,14 +283,6 @@ async function runImport() {
   const allEntities = Array.from(entityMap.values());
   const entityLookup = new Map<string, string>(allEntities.map(e => [e.id, e.typeId]));
   const allOps: any[] = [];
-
-  const PROP_IDS = {
-    NAME: 'a126ca530c8e48d5b88882c734c38935',
-    RXCUI: 'e6c50e227460442cab646a48f235459a',
-    SMILES: SOURCE_DATA_IDS.SMILES,
-    PMID: SOURCE_DATA_IDS.PMID,
-    INCHIKEY: SOURCE_DATA_IDS.INCHI_KEY,
-  };
 
   console.log(`🔄 Generating operations for ${allEntities.length} total entities...`);
 
@@ -299,14 +299,19 @@ async function runImport() {
     }
     existingIds.add(normalizedId);
 
-    const values: any[] = [{ property: PROP_IDS.RXCUI, type: 'text', value: entity.rxcui }];
+    // Build property values
+    const values: any[] = [
+      { property: PROPERTY_IDS.RXCUI, type: 'text', value: entity.rxcui }
+    ];
     
+    // Add PubChem properties only for Ingredient type
     if (entity.typeId === TYPE_IDS.IN) {
-      if (entity.SMILES) values.push({ property: PROP_IDS.SMILES, type: 'text', value: String(entity.SMILES) });
-      if (entity.PMID) values.push({ property: PROP_IDS.PMID, type: 'text', value: String(entity.PMID) });
-      if (entity.INCHIKEY) values.push({ property: PROP_IDS.INCHIKEY, type: 'text', value: String(entity.INCHIKEY) });
+      if (entity.SMILES) values.push({ property: PROPERTY_IDS.SMILES, type: 'text', value: String(entity.SMILES) });
+      if (entity.PMID) values.push({ property: PROPERTY_IDS.PMID, type: 'text', value: String(entity.PMID) });
+      if (entity.INCHIKEY) values.push({ property: PROPERTY_IDS.INCHI_KEY, type: 'text', value: String(entity.INCHIKEY) });
     }
 
+    // Build relations
     const relations: Record<string, Array<{ toEntity: string }>> = {};
     if (entity.relations && typeof entity.relations === 'object') {
       for (const [relationId, rawValue] of Object.entries(entity.relations)) {

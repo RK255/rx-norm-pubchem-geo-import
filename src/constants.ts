@@ -1,6 +1,8 @@
 // src/constants.ts
 
-// --- ONTOLOGY UUIDS (From ONTOLOGY.md) ---
+// =============================================================================
+// ENTITY TYPE IDs
+// =============================================================================
 export const TYPE_IDS = {
   IN: 'b1bb9b33cdd247dfaf02ad98506c39eb',
   BN: '402cae0b9c17472586a2236f70492d7b',
@@ -11,8 +13,10 @@ export const TYPE_IDS = {
   PIN: '4ba36be2740b4f36aa7c31512869bb3c',
 } as const;
 
-export const PROP_IDS = {
-  RXCUI: 'e6c50e227460442cab646a48f235459a',
+// =============================================================================
+// RELATION IDs (edges between entities)
+// =============================================================================
+export const RELATION_IDS = {
   BRAND_NAMES: '3f30135c25394a0bb6ae429ef87337e1',
   DOSE_FORMS: '88a39df4de3542b8a6b0155750617b76',
   SEMANTIC_BRANDED_DRUGS: 'da89d8e2f052468f92ae5e8557ff1e78',
@@ -21,15 +25,13 @@ export const PROP_IDS = {
   PRECISE_INGREDIENTS: '5d5602ac0fe64f4dbdc345c0bdf09d72',
 } as const;
 
-// --- SOURCE DATA MAP (IDs found in rxnorm_entities_enriched.jsonl) ---
-export const SOURCE_DATA_IDS = {
-  TTY: 'fd0c76eae47c55bbac4cca96203752c1',
-  RXCUI: 'c6f36f8a8e22546ea7618ac008d2f91e',
+// =============================================================================
+// PROPERTY IDs (values on entities)
+// =============================================================================
+export const PROPERTY_IDS = {
   NAME: 'a126ca530c8e48d5b88882c734c38935',
-  
-  // PubChem Property IDs
-  SMILES: '07bc332f2afd4e498d868f4e85ec5cc1', 
+  RXCUI: 'e6c50e227460442cab646a48f235459a',
+  SMILES: '07bc332f2afd4e498d868f4e85ec5cc1',
   INCHI_KEY: '93d0ecbc41df4c668d2fb16172002dcb',
   PMID: '1577e86142964c9484c92cf079e330e1',
-  CID: 'bdd863e095365bbea65deae8ebf1e81b',
 } as const;
