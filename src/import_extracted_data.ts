@@ -1,13 +1,22 @@
 // src/import_extracted_data.ts
+import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto'; // FIX: Use standard import
+import { fileURLToPath } from 'url';
 import { Graph, personalSpace, getSmartAccountWalletClient } from '@geoprotocol/geo-sdk';
 import { TYPE_IDS, SOURCE_DATA_IDS } from './constants';
+import type { Hex } from 'viem';
 
-// --- Argument Parsing ---
+// --- ESM __dirname POLYFIX ---
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// --- ARGUMENT PARSING ---
 const args = process.argv.slice(2);
 const limitArgIndex = args.indexOf('--limit');
-let INGREDIENT_LIMIT = 5; // Default
+// Default to undefined (Import All) unless --limit is specified
+let INGREDIENT_LIMIT: number | undefined = undefined; 
 
 if (limitArgIndex !== -1 && args[limitArgIndex + 1]) {
   INGREDIENT_LIMIT = parseInt(args[limitArgIndex + 1], 10);
@@ -17,11 +26,14 @@ if (limitArgIndex !== -1 && args[limitArgIndex + 1]) {
   }
 }
 
-// --- Configuration ---
+const FORCE_PUBLISH = args.includes('--force'); // Skip deduplication if present
+
+// --- CONFIGURATION ---
 const DATA_DIR = path.join(__dirname, '..', 'data_to_publish');
 const MASTER_FILE = path.join(DATA_DIR, 'full_geo_extraction.json'); 
+const API_URL = "https://testnet-api.geobrowser.io/graphql";
 
-// --- Types ---
+// --- TYPES ---
 interface Entity {
   id: string;
   typeId: string;
@@ -31,72 +43,87 @@ interface Entity {
   [key: string]: any;
 }
 
-async function runImport() {
-  console.log(`🚀 Starting Import (Limit: ${INGREDIENT_LIMIT})...`);
+// --- PRE-FLIGHT CHECK (DEDUPLICATION FIX) ---
+// Fetches existing entity IDs to prevent duplicates.
+async function fetchExistingEntityIds(spaceId: string): Promise<Set<string>> {
+  console.log(`🔍 Pre-flight check: Fetching existing entities...`);
+  const existingIds = new Set<string>();
+  const RX_CUI_PROPERTY_ID = 'e6c50e227460442cab646a48f235459a'; // Fingerprint property
 
-  // 1. Load Environment Variables
+  try {
+    const query = `
+      query GetPharmaEntities {
+        values(filter: { spaceId: { is: "${spaceId}" }, propertyId: { is: "${RX_CUI_PROPERTY_ID}" } }) {
+          entityId
+        }
+      }
+    `;
+    const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) });
+    const json = await res.json() as { errors?: any[]; data?: any };
+
+    if (json.errors) {
+      console.error('⚠️  Warning: Could not fetch existing entities. Proceeding without check.');
+      return existingIds;
+    }
+
+    const values = json.data?.values || [];
+    values.forEach((v: any) => existingIds.add(v.entityId.replace(/-/g, ''))); // Normalize: Remove hyphens
+    console.log(`📦 Found ${existingIds.size} existing entities.`);
+  } catch (e) {
+    console.error('⚠️  Warning: Fetch failed. Proceeding without check.');
+  }
+  return existingIds;
+}
+
+async function runImport() {
+  console.log(`🚀 Starting Import${INGREDIENT_LIMIT ? ` (Limit: ${INGREDIENT_LIMIT})` : ' (All Data)'}...`);
+  if (FORCE_PUBLISH) console.warn('⚠️  --force flag detected: Skipping existence check!');
+
+  // 1. Init Environment
   const privateKeyRaw = process.env.GEO_WALLET_PRIVATE_KEY;
   const spaceId = process.env.GEO_SPACE_ID;
-
   if (!privateKeyRaw || !spaceId) {
     console.error('❌ Missing GEO_WALLET_PRIVATE_KEY or GEO_SPACE_ID in .env');
     process.exit(1);
   }
-
-  const privateKey = privateKeyRaw.startsWith('0x') ? privateKeyRaw : `0x${privateKeyRaw}`;
-
-  // 2. Initialize Smart Account
+  const privateKey = privateKeyRaw.startsWith('0x') ? privateKeyRaw as Hex : `0x${privateKeyRaw}` as Hex; // FIX: Explicit Hex type
   const smartAccount = await getSmartAccountWalletClient({ privateKey });
   console.log('✅ Smart Account Initialized.');
+
+  // 2. Fetch Existing IDs
+  const existingIds = FORCE_PUBLISH ? new Set<string>() : await fetchExistingEntityIds(spaceId);
 
   // 3. Load Data
   if (!fs.existsSync(MASTER_FILE)) {
     console.error(`❌ Master file not found: ${MASTER_FILE}`);
     process.exit(1);
   }
-
   const rawData = fs.readFileSync(MASTER_FILE, 'utf-8');
   const allIngredients: Entity[] = JSON.parse(rawData);
   console.log(`📦 Loaded ${allIngredients.length} total ingredients from Master.`);
 
-  // 4. Slice the data based on the limit
-  const ingredientsToImport = allIngredients.slice(0, INGREDIENT_LIMIT);
-  console.log(`🧪 Isolated ${ingredientsToImport.length} ingredients for import.`);
+  // 4. Slice Data
+  const ingredientsToImport = INGREDIENT_LIMIT ? allIngredients.slice(0, INGREDIENT_LIMIT) : allIngredients;
+  console.log(`🧪 Isolated ${ingredientsToImport.length} ingredients for import.\n`);
 
-  // 4b. PRINT THE INGREDIENTS
-  console.log('\n📋 Ingredients to be imported:');
-  ingredientsToImport.forEach((ing, index) => {
-    console.log(`   ${index + 1}. ${ing.name} (RxCUI: ${ing.rxcui})`);
-  });
-  console.log('');
-
-  // 5. Expand these ingredients into ALL entities (Ingredients + Related)
+  // 5. Expand Ingredients -> All Entities (Ingredients + Brands + Forms + Drugs)
   const entityMap = new Map<string, Entity>();
-  const processedEntityIds = new Set<string>(); // FIX: Track processed IDs to prevent duplicates
+  const crypto = await import('crypto');
   
-  // Helper to generate IDs
-  const crypto = require('crypto');
   function generateUuid(rxcui: string, typeId: string): string {
     const seed = `${typeId}:${rxcui}`;
     const hash = crypto.createHash('sha256').update(seed).digest('hex');
-    return [
-      hash.substring(0, 8),
-      hash.substring(8, 12),
-      hash.substring(12, 16),
-      hash.substring(16, 20),
-      hash.substring(20, 32)
-    ].join('-');
+    return [hash.substring(0, 8), hash.substring(8, 12), hash.substring(12, 16), hash.substring(16, 20), hash.substring(20, 32)].join('-');
   }
 
-  // Type ID Mapping
   const TTY_TO_TYPE_ID: { [key: string]: string } = {
-    'in': 'b1bb9b33cdd247dfaf02ad98506c39eb',
-    'bn': '402cae0b9c17472586a2236f70492d7b',
-    'df': '06e2222273114885b32b3a1368d2d266',
-    'sbd': '2033a9f3942a4c828dcdfe0411609450',
-    'scd': 'a844e0f3a48d4e82b234da893aee4291',
-    'min': 'f0250a1cc9e8431980b3e9d7661e08f9',
-    'pin': '4ba36be2740b4f36aa7c31512869bb3c',
+    'in': 'b1bb9b33cdd247dfaf02ad98506c39eb', // Ingredient
+    'bn': '402cae0b9c17472586a2236f70492d7b', // Brand Name
+    'df': '06e2222273114885b32b3a1368d2d266', // Dose Form
+    'sbd': '2033a9f3942a4c828dcdfe0411609450', // Semantic Branded Drug
+    'scd': 'a844e0f3a48d4e82b234da893aee4291', // Semantic Clinical Drug
+    'min': 'f0250a1cc9e8431980b3e9d7661e08f9', // Multiple Ingredient
+    'pin': '4ba36be2740b4f36aa7c31512869bb3c', // Precise Ingredient
   };
 
   const TTY_TO_RELATION_ID: { [key: string]: string } = {
@@ -110,66 +137,42 @@ async function runImport() {
 
   function getEntity(id: string, typeId: string, rxcui: string, name: string): Entity {
     if (!entityMap.has(id)) {
-      const entity: Entity = {
-        id,
-        typeId,
-        rxcui,
-        name,
-        relations: {},
-      };
+      const entity: Entity = { id, typeId, rxcui, name, relations: {} };
       entityMap.set(id, entity);
     }
     return entityMap.get(id)!;
   }
 
-  // Process the limited ingredients
+  // Expansion Logic
   ingredientsToImport.forEach((ing) => {
-    // 1. Create the Ingredient Entity
     const ingId = generateUuid(ing.rxcui, TTY_TO_TYPE_ID['in']);
     const ingEntity = getEntity(ingId, TTY_TO_TYPE_ID['in'], ing.rxcui, ing.name);
     
-    // Copy Properties from master file if they exist
+    // Attach PubChem props
     if ((ing as any).smiles) ingEntity.SMILES = (ing as any).smiles;
     if ((ing as any).pmid) ingEntity.PMID = (ing as any).pmid;
     if ((ing as any).inchi_key) ingEntity.INCHIKEY = (ing as any).inchi_key;
 
-    // 2. Process Connections (Create Related Entities)
     const connections = (ing as any).connections || {};
-    
     Object.entries(connections).forEach(([tty, connList]) => {
       if (!Array.isArray(connList) || connList.length === 0) return;
-      
       const relatedTypeId = TTY_TO_TYPE_ID[tty];
       const relationId = TTY_TO_RELATION_ID[tty];
-      
       if (!relatedTypeId || !relationId) return;
 
-      // Initialize the relation array on the ingredient
-      if (!ingEntity.relations[relationId]) {
-        ingEntity.relations[relationId] = [];
-      }
-
+      if (!ingEntity.relations[relationId]) ingEntity.relations[relationId] = [];
       connList.forEach((conn: any) => {
-        // Create the Related Entity
         const connId = generateUuid(conn.rxcui, relatedTypeId);
-        const relatedEntity = getEntity(connId, relatedTypeId, conn.rxcui, conn.name);
-
-        // Link Ingredient -> Related Entity
+        getEntity(connId, relatedTypeId, conn.rxcui, conn.name);
         (ingEntity.relations[relationId] as string[]).push(connId);
       });
     });
   });
 
   const allEntities = Array.from(entityMap.values());
-
-  // 6. Create a lookup of ID -> TypeID for ALL entities in this batch
-  const entityLookup = new Map<string, string>();
-  allEntities.forEach(e => entityLookup.set(e.id, e.typeId));
-
-  console.log(`🔄 Generating operations for ${allEntities.length} total entities...`);
+  const entityLookup = new Map<string, string>(allEntities.map(e => [e.id, e.typeId]));
   const allOps: any[] = [];
 
-  // --- Property IDs ---
   const PROP_IDS = {
     NAME: 'a126ca530c8e48d5b88882c734c38935',
     RXCUI: 'e6c50e227460442cab646a48f235459a',
@@ -178,99 +181,87 @@ async function runImport() {
     INCHIKEY: SOURCE_DATA_IDS.INCHI_KEY,
   };
 
+  console.log(`🔄 Generating operations for ${allEntities.length} total entities...`);
+
+  // 6. Generate Operations
   allEntities.forEach((entity) => {
-    // FIX: Check if we've already processed this entity ID
-    if (processedEntityIds.has(entity.id)) {
-      console.log(`⏭️  Skipping duplicate entity processing: ${entity.name} (${entity.id})`);
-      return; // Skip this iteration entirely
+    // FIX: Deduplication Check (Normalize ID to match API format)
+    const normalizedId = entity.id.replace(/-/g, '');
+    if (existingIds.has(normalizedId)) {
+      return; // Skip silently or log count later
     }
     
-    // Mark as processed
-    processedEntityIds.add(entity.id);
+    existingIds.add(normalizedId); // Mark as seen in this run
 
-    // 1. Set Values
-    const values: any[] = [];
+    const values: any[] = [{ property: PROP_IDS.RXCUI, type: 'text', value: entity.rxcui }];
     
-    // Add RxCUI (common to all entities)
-    values.push({ property: PROP_IDS.RXCUI, type: 'text', value: entity.rxcui });
-    
-    // Add Name (common to all entities)
-    values.push({ property: PROP_IDS.NAME, type: 'text', value: entity.name });
-
-    // Add Properties ONLY if this is an Ingredient
     if (entity.typeId === TYPE_IDS.IN) {
       if (entity.SMILES) values.push({ property: PROP_IDS.SMILES, type: 'text', value: String(entity.SMILES) });
       if (entity.PMID) values.push({ property: PROP_IDS.PMID, type: 'text', value: String(entity.PMID) });
       if (entity.INCHIKEY) values.push({ property: PROP_IDS.INCHIKEY, type: 'text', value: String(entity.INCHIKEY) });
     }
 
-    // 2. Set Relations
     const relations: Record<string, Array<{ toEntity: string }>> = {};
-    
     if (entity.relations && typeof entity.relations === 'object') {
       for (const [relationId, rawValue] of Object.entries(entity.relations)) {
         if (Array.isArray(rawValue)) {
-            const cleanList: Array<{ toEntity: string }> = [];
-            
-            for (const id of rawValue) {
-                // FIX: Corrected the regex typo
-                if (id && typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id) && entityLookup.has(id)) {
-                    cleanList.push({ toEntity: id });
-                }
-            }
-
-            if (cleanList.length > 0) {
-                relations[relationId] = cleanList;
-            }
+          const cleanList = rawValue
+            .filter((id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id) && entityLookup.has(id))
+            .map((id: string) => ({ toEntity: id }));
+          if (cleanList.length > 0) relations[relationId] = cleanList;
         }
       }
     }
 
-    // 3. Create the Entity Operation
     try {
-        const result = Graph.createEntity({
-          id: entity.id,
-          types: [entity.typeId],
-          values,
-          relations 
-        });
-
-        allOps.push(...result.ops);
+      const result = Graph.createEntity({ id: entity.id, name: entity.name, types: [entity.typeId], values, relations });
+      allOps.push(...result.ops);
     } catch (e: any) {
-        console.error(`❌ Error creating entity ${entity.name} (${entity.id}): ${e.message}`);
+      console.error(`❌ Error creating entity ${entity.name}: ${e.message}`);
     }
   });
 
   console.log(`📊 Generated ${allOps.length} operations.`);
 
   if (allOps.length === 0) {
-    console.error('❌ No operations generated. Aborting publish.');
+    console.log('✅ No new entities to publish. Everything is up to date.');
     return;
   }
 
-  // 5. Save Ops
-  fs.writeFileSync(path.join(DATA_DIR, "extracted_data_ops.txt"), JSON.stringify(allOps, null, 2));
+  // 7. Save Artifacts
+  const manifestPath = path.join(DATA_DIR, `manifest_${Date.now()}.json`);
+  fs.writeFileSync(manifestPath, JSON.stringify({
+    timestamp: new Date().toISOString(),
+    batchName: `Import Limit ${INGREDIENT_LIMIT || 'ALL'}`,
+    spaceId: spaceId,
+    entityIds: allEntities.map(e => e.id)
+  }, null, 2));
+  console.log(`💾 Saved manifest to: ${manifestPath}`);
 
-  // 6. Publish
+  const opsPath = path.join(DATA_DIR, "extracted_data_ops.txt");
+  fs.writeFileSync(opsPath, JSON.stringify(allOps, null, 2));
+  console.log(`💾 Saved raw ops to: ${opsPath}`);
+
+  // 8. Publish
   console.log(`🚀 Publishing operations to Geo...`);
-  const { cid, editId, to, calldata } = await personalSpace.publishEdit({
-    name: `Import (Limit ${INGREDIENT_LIMIT})`,
-    spaceId,
-    ops: allOps,
-    author: spaceId,
-    network: "TESTNET",
-  });
+  try {
+    const { cid, editId, to, calldata } = await personalSpace.publishEdit({
+      name: `Import ${INGREDIENT_LIMIT ? `(Limit ${INGREDIENT_LIMIT})` : '(All)'}`,
+      spaceId,
+      ops: allOps,
+      author: spaceId,
+      network: "TESTNET",
+    });
 
-  console.log(`📝 IPFS CID: ${cid}`);
-  console.log(`🆔 Edit ID: ${editId}`);
-  console.log(`📬 Calldata Target: ${to}`);
+    console.log(`📝 IPFS CID: ${cid}`);
+    console.log(`🆔 Edit ID: ${editId}`);
+    console.log(`📬 Target: ${to}`);
 
-  const txHash = await smartAccount.sendTransaction({
-    to,
-    data: calldata,
-  });
-
-  console.log(`✅ Import Complete. TX Hash: ${txHash}`);
+    const txHash = await smartAccount.sendTransaction({ to, data: calldata });
+    console.log(`✅ Import Complete. TX: ${txHash}`);
+  } catch (e) {
+    console.error('❌ Publish failed:', e);
+  }
 }
 
 runImport().catch(console.error);
