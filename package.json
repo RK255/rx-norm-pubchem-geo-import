@@ -4,18 +4,22 @@
   "description": "Ingests RxNorm pharma data into the Geo Knowledge Graph.",
   "type": "module",
   "scripts": {
-    "publish": "tsx src/02_publish.ts",
-    "delete": "tsx src/03_delete.ts",
-    "validate": "tsx src/01_validate.ts"
+    "build": "tsc",
+    "import": "tsx src/import_extracted_data.ts",
+    "import:dist": "node dist/import_extracted_data.js",
+    "rollback": "tsx src/rollback_selective.ts",
+    "rollback:dist": "node dist/rollback_selective.js",
+    "clean_all": "tsx src/clean_pharma_types.ts",
+    "clean_all:dist": "node dist/clean_pharma_types.js"
   },
   "dependencies": {
     "@geoprotocol/geo-sdk": "0.17.0",
-    "dotenv": "16.4.0",
-    "fs-extra": "^11.3.4",
+    "dotenv": "^1^.4.0",
+    "fs-extra": "^2^.3.4",
     "viem": "2.0.0"
   },
   "devDependencies": {
-    "@types/node": "20.0.0",
+    "@types/node": "^3^.6.0",
     "tsx": "4.21.0",
     "typescript": "6.0.2"
   }
