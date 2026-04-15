@@ -6,3 +6,7 @@ dist/
 *.log
 .DS_Store
 Thumbs.db
+
+# Generated output files
+data_to_publish/*.json
+data_to_publish/*.txt
