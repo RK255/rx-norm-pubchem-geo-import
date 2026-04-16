@@ -259,9 +259,9 @@ async function runImport() {
     const ingEntity = getEntity(ingId, TYPE_IDS.IN, ing.rxcui, ing.name, entityMap);
     
     // Add PubChem properties to ingredient entities
-    if (ing.SMILES) ingEntity.SMILES = ing.SMILES;
-    if (ing.PMID) ingEntity.PMID = ing.PMID;
-    if (ing.INCHIKEY) ingEntity.INCHIKEY = ing.INCHIKEY;
+    if (ing.smiles) ingEntity.SMILES = ing.smiles;
+    if (ing.pmid) ingEntity.PMID = ing.pmid;
+    if (ing.inchi_key) ingEntity.INCHIKEY = ing.inchi_key;
 
     // Process connections
     const connections = (ing as any).connections || {};
