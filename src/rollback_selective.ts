@@ -3,7 +3,7 @@ import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { Graph, personalSpace, getSmartAccountWalletClient } from '@geoprotocol/geo-sdk';
+import { Graph, personalSpace, daoSpace, getSmartAccountWalletClient } from '@geoprotocol/geo-sdk';
 import type { Hex } from 'viem';
 
 // --- ESM __dirname FIX ---
@@ -27,6 +27,49 @@ if (!path.isAbsolute(manifestPath)) {
 
 // --- CONFIGURATION ---
 const API_URL = "https://testnet-api.geobrowser.io/graphql";
+
+// --- DETECT SPACE TYPE ---
+async function detectSpaceType(spaceId: string): Promise<'PERSONAL' | 'DAO'> {
+  const query = `
+    query GetSpaceType {
+      space(id: "${spaceId}") { type }
+    }
+  `;
+  
+  const res = await fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query }),
+  });
+  
+  const json = await res.json() as { errors?: any[]; data?: any };
+  
+  if (json.errors) {
+    console.error('❌ Failed to query space type:');
+    json.errors.forEach((e: any) => console.error(`   ${e.message}`));
+    process.exit(1);
+  }
+  
+  if (!json.data?.space) {
+    console.error(`❌ Space not found: ${spaceId}`);
+    process.exit(1);
+  }
+  
+  if (!json.data.space.type) {
+    console.error('❌ Space type not returned by API. Cannot proceed.');
+    process.exit(1);
+  }
+  
+  const type = json.data.space.type as string;
+  
+  if (type !== 'PERSONAL' && type !== 'DAO') {
+    console.error(`❌ Unknown space type: ${type}. Expected PERSONAL or DAO.`);
+    process.exit(1);
+  }
+  
+  console.log(`📋 Detected space type: ${type}`);
+  return type as 'PERSONAL' | 'DAO';
+}
 
 // --- GQL HELPER ---
 async function queryGeo(query: string) {
@@ -69,6 +112,9 @@ async function runRollback() {
     process.exit(1);
   }
 
+  // 3. Detect space type
+  const spaceType = await detectSpaceType(envSpaceId);
+
   console.log(`🧹 Starting Rollback for Batch: ${batchName}`);
   console.log(`🎯 Target Entities: ${entityIds.length}`);
 
@@ -81,7 +127,7 @@ async function runRollback() {
     return;
   }
 
-  // 3. Fetch Current State
+  // 4. Fetch Current State
   console.log(`📡 Fetching current data on-chain...`);
 
   const valuesQuery = `
@@ -107,7 +153,7 @@ async function runRollback() {
 
   console.log(`   📦 Found ${values.length} values and ${relations.length} relations to delete.`);
 
-  // 4. Generate Deletion ops
+  // 5. Generate Deletion ops
   const allOps: any[] = [];
 
   // A. Unset Values
@@ -148,23 +194,50 @@ async function runRollback() {
     return;
   }
 
-  // 5. Publish
-  console.log(`🚀 Publishing Rollback...`);
+  // 6. Publish
+  console.log(`🚀 Publishing Rollback (${spaceType} space)...`);
   const privateKeyRaw = process.env.GEO_WALLET_PRIVATE_KEY;
   if (!privateKeyRaw) throw new Error("Missing private key");
   const privateKey = privateKeyRaw.startsWith('0x') ? privateKeyRaw as Hex : `0x${privateKeyRaw}` as Hex;
   const smartAccount = await getSmartAccountWalletClient({ privateKey });
 
-  const { cid, editId, to, calldata } = await personalSpace.publishEdit({
-    name: `Rollback: ${batchName}`,
-    spaceId: envSpaceId,
-    ops: allOps,
-    author: envSpaceId,
-    network: "TESTNET",
-  });
+  let cid: string;
+  let editId: string;
+  let to: string;
+  let calldata: string;
 
-  console.log(`📝 IPFS CID: ${cid}`);
-  console.log(`🆔 Edit ID: ${editId}`);
+  if (spaceType === 'DAO') {
+    const result = await daoSpace.proposeEdit({
+      name: `Rollback: ${batchName}`,
+      spaceId: envSpaceId,
+      ops: allOps,
+      author: envSpaceId,
+      network: "TESTNET",
+    });
+    cid = result.cid;
+    editId = result.editId;
+    to = result.to;
+    calldata = result.calldata;
+    console.log(`📝 Proposal created. CID: ${cid}`);
+    console.log(`🆔 Edit ID: ${editId}`);
+    console.log(`⚠️  DAO Proposal submitted. Voting may be required before execution.`);
+  } else {
+    const result = await personalSpace.publishEdit({
+      name: `Rollback: ${batchName}`,
+      spaceId: envSpaceId,
+      ops: allOps,
+      author: envSpaceId,
+      network: "TESTNET",
+    });
+    cid = result.cid;
+    editId = result.editId;
+    to = result.to;
+    calldata = result.calldata;
+    console.log(`📝 IPFS CID: ${cid}`);
+    console.log(`🆔 Edit ID: ${editId}`);
+  }
+
+  console.log(`📬 Target: ${to}`);
 
   const txHash = await smartAccount.sendTransaction({ to, data: calldata });
   console.log(`\n✅ Rollback Complete. TX: ${txHash}`);

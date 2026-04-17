@@ -42,3 +42,21 @@ FIX: Removed bun.lockb from .gitignore since bun.lock should be committed for re
 
 15. Constants defined but never used (IUPAC, FORMULA, CID)
 FIX: Removed all unused constants during the constants.ts cleanup.
+
+## NEW UPDATES (2026-04-16)
+
+16. Malformed semver in `package.json`
+FIX: Replaced corrupted versions with correct ones from lockfile. dotenv `^1^.4.0` → `17.4.2` (exact, no caret), added viem `2.37.6` (exact, no caret). Removed unused `fs-extra` dependency. Also removed `@types/node` from devDependencies since bun/tsx handles types separately. Fresh installs now resolve correctly.
+
+17. TypeScript `fetch` type errors
+FIX: Added `"DOM"` to tsconfig.json `"lib"` array: `"lib": ["ES2022", "DOM"]`. The `fetch` API is available from ES2023/DOM, and Node.js 18+ provides native fetch. Now `npx tsc --noEmit` compiles without errors.
+
+18. PubChem CID values still not published
+STATUS: SKIPPED — CID property is not yet in the ontology. All 1,790 ingredients have CID values in source data, but publishing will wait until the CID property is added to the Geo schema. Issue #7 remains open.
+
+19. No space type detection — personal vs DAO
+FIX: Added `detectSpaceType()` function that queries the Geo API for `space.type` at startup. Routes to `personalSpace.publishEdit()` for PERSONAL spaces and `daoSpace.proposeEdit()` for DAO spaces. Also fixed GraphQL variable type mismatch (`UUID!` vs `String!`) by using inline interpolation. Exits with error if space type cannot be determined.
+
+20. `clean_pharma_types.ts` hardcodes RxCUI property ID
+FIX: Replaced hardcoded `'e6c50e227460442cab646a48f235459a'` with `PROPERTY_IDS.RXCUI` imported from `constants.ts`. Maintains single source of truth for all property/relation IDs.
+

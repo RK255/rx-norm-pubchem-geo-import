@@ -2,11 +2,11 @@
 import 'dotenv/config';
 import { Graph, personalSpace, getSmartAccountWalletClient } from '@geoprotocol/geo-sdk';
 import type { Hex } from 'viem';
+import { PROPERTY_IDS } from './constants';
 
 // --- CONFIGURATION ---
 const API_URL = "https://testnet-api.geobrowser.io/graphql";
 const SPACE_ID = process.env.GEO_SPACE_ID;
-const RX_CUI_PROPERTY_ID = 'e6c50e227460442cab646a48f235459a'; // Fingerprint property
 
 // --- GQL HELPER ---
 async function queryGeo(query: string) {

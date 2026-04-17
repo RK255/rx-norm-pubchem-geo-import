@@ -5,7 +5,7 @@ import path from 'path';
 import crypto from 'crypto';
 import readline from 'readline';
 import { fileURLToPath } from 'url';
-import { Graph, personalSpace, getSmartAccountWalletClient } from '@geoprotocol/geo-sdk';
+import { Graph, personalSpace, daoSpace, getSmartAccountWalletClient } from '@geoprotocol/geo-sdk';
 import { TYPE_IDS, RELATION_IDS, PROPERTY_IDS } from './constants';
 import type { Hex } from 'viem';
 
@@ -78,6 +78,49 @@ const TTY_TO_RELATION_ID: { [key: string]: string } = {
   'pin': RELATION_IDS.PRECISE_INGREDIENTS,
   'df': RELATION_IDS.DOSE_FORMS,
 };
+
+// --- DETECT SPACE TYPE ---
+async function detectSpaceType(spaceId: string): Promise<'PERSONAL' | 'DAO'> {
+  const query = `
+    query GetSpaceType {
+      space(id: "${spaceId}") { type }
+    }
+  `;
+  
+  const res = await fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query }),
+  });
+  
+  const json = await res.json() as { errors?: any[]; data?: any };
+  
+  if (json.errors) {
+    console.error('❌ Failed to query space type:');
+    json.errors.forEach((e: any) => console.error(`   ${e.message}`));
+    process.exit(1);
+  }
+  
+  if (!json.data?.space) {
+    console.error(`❌ Space not found: ${spaceId}`);
+    process.exit(1);
+  }
+  
+  if (!json.data.space.type) {
+    console.error('❌ Space type not returned by API. Cannot proceed.');
+    process.exit(1);
+  }
+  
+  const type = json.data.space.type as string;
+  
+  if (type !== 'PERSONAL' && type !== 'DAO') {
+    console.error(`❌ Unknown space type: ${type}. Expected PERSONAL or DAO.`);
+    process.exit(1);
+  }
+  
+  console.log(`📋 Detected space type: ${type}`);
+  return type as 'PERSONAL' | 'DAO';
+}
 
 // --- PRE-FLIGHT CHECK ---
 async function fetchExistingEntityIds(spaceId: string): Promise<Set<string>> {
@@ -217,17 +260,20 @@ async function runImport() {
 
   const privateKey = privateKeyRaw?.startsWith('0x') ? privateKeyRaw as Hex : `0x${privateKeyRaw}` as Hex;
 
-  // 2. Init Wallet (skip for dry-run)
+  // 2. Detect space type
+  const spaceType = await detectSpaceType(spaceId!);
+
+  // 3. Init Wallet (skip for dry-run)
   let smartAccount: Awaited<ReturnType<typeof getSmartAccountWalletClient>> | null = null;
   if (!DRY_RUN) {
     smartAccount = await getSmartAccountWalletClient({ privateKey: privateKey! });
     console.log('✅ Smart Account Initialized.');
   }
 
-  // 3. Fetch Existing IDs (skip for dry-run since we want full preview)
+  // 4. Fetch Existing IDs (skip for dry-run since we want full preview)
   const existingIds = (DRY_RUN || FORCE_PUBLISH) ? new Set<string>() : await fetchExistingEntityIds(spaceId!);
 
-  // 4. Load Data
+  // 5. Load Data
   if (!fs.existsSync(MASTER_FILE)) {
     console.error(`❌ Master file not found: ${MASTER_FILE}`);
     process.exit(1);
@@ -236,7 +282,7 @@ async function runImport() {
   const allIngredients: Entity[] = JSON.parse(rawData);
   console.log(`📦 Loaded ${allIngredients.length} total ingredients from Master.`);
 
-  // 5. Slice & Filter Data
+  // 6. Slice & Filter Data
   let ingredientsToImport = INGREDIENT_LIMIT ? allIngredients.slice(0, INGREDIENT_LIMIT) : allIngredients;
 
   if (CONNECTED_ONLY) {
@@ -251,7 +297,7 @@ async function runImport() {
 
   console.log(`🧪 Isolated ${ingredientsToImport.length} ingredients for import.\n`);
 
-  // 6. Expand Ingredients -> All Entities
+  // 7. Expand Ingredients -> All Entities
   const entityMap = new Map<string, Entity>();
 
   ingredientsToImport.forEach((ing) => {
@@ -286,7 +332,7 @@ async function runImport() {
 
   console.log(`🔄 Generating operations for ${allEntities.length} total entities...`);
 
-  // 7. Generate Operations
+  // 8. Generate Operations
   let skippedCount = 0;
   allEntities.forEach((entity) => {
     const normalizedId = entity.id.replace(/-/g, '');
@@ -337,7 +383,7 @@ async function runImport() {
     console.log(`   ⏭️  Skipped ${skippedCount} entities (already exist on-chain).`);
   }
 
-  // 8. Save artifacts
+  // 9. Save artifacts
   const timestamp = Date.now();
 
   if (DRY_RUN) {
@@ -353,6 +399,7 @@ async function runImport() {
       timestamp: new Date().toISOString(),
       batchName: `Import ${INGREDIENT_LIMIT ? `Limit ${INGREDIENT_LIMIT}` : 'All'}${CONNECTED_ONLY ? ' (Connected Only)' : ''}`,
       spaceId: spaceId,
+      spaceType: spaceType,
       entityIds: allEntities.map(e => e.id),
       entityCount: allEntities.length,
       opsCount: allOps.length,
@@ -362,7 +409,7 @@ async function runImport() {
     console.log(`\n💾 Saved manifest to: ${manifestPath}`);
   }
 
-  // 9. DRY RUN EXIT
+  // 10. DRY RUN EXIT
   if (DRY_RUN) {
     console.log('\n' + '='.repeat(60));
     console.log('DRY RUN COMPLETE');
@@ -376,21 +423,25 @@ async function runImport() {
     return;
   }
 
-  // 10. No new entities - Exit gracefully
+  // 11. No new entities - Exit gracefully
   if (allOps.length === 0) {
     console.log('\n✅ No new entities to publish. Everything is up to date.');
     return;
   }
 
-  // 11. Interactive Confirmation
+  // 12. Interactive Confirmation
   console.log('\n' + '='.repeat(60));
   console.log('PUBLISH PREVIEW');
   console.log('='.repeat(60));
+  console.log(`   Space ID: ${spaceId}`);
+  console.log(`   Space Type: ${spaceType}`);
   console.log(`   Ingredients: ${ingredientsToImport.length}`);
   console.log(`   Total entities: ${allEntities.length}`);
   console.log(`   Operations: ${allOps.length}`);
   console.log(`   Skipped (already exist): ${skippedCount}`);
-  console.log(`   Space: ${spaceId}`);
+  if (spaceType === 'DAO') {
+    console.log(`   ⚠️  DAO Space: This will create a PROPOSAL that requires voting.`);
+  }
   console.log('='.repeat(60));
 
   const confirmed = await confirmPublish();
@@ -399,19 +450,47 @@ async function runImport() {
     return;
   }
 
-  // 12. Publish
-  console.log(`\n🚀 Publishing operations to Geo...`);
+  // 13. Publish - Route based on space type
+  console.log(`\n🚀 Publishing operations to Geo (${spaceType} space)...`);
   try {
-    const { cid, editId, to, calldata } = await personalSpace.publishEdit({
-      name: `Import ${INGREDIENT_LIMIT ? `(Limit ${INGREDIENT_LIMIT})` : '(All)'}${CONNECTED_ONLY ? ' [Connected Only]' : ''}`,
-      spaceId: spaceId!,
-      ops: allOps,
-      author: spaceId!,
-      network: "TESTNET",
-    });
+    let cid: string;
+    let editId: string;
+    let to: string;
+    let calldata: string;
 
-    console.log(`📝 IPFS CID: ${cid}`);
-    console.log(`🆔 Edit ID: ${editId}`);
+    if (spaceType === 'DAO') {
+      // DAO Space: Create a proposal
+      const result = await daoSpace.proposeEdit({
+        name: `Import ${INGREDIENT_LIMIT ? `(Limit ${INGREDIENT_LIMIT})` : '(All)'}${CONNECTED_ONLY ? ' [Connected Only]' : ''}`,
+        spaceId: spaceId!,
+        ops: allOps,
+        author: spaceId!,
+        network: "TESTNET",
+      });
+      cid = result.cid;
+      editId = result.editId;
+      to = result.to;
+      calldata = result.calldata;
+      console.log(`📝 Proposal created. CID: ${cid}`);
+      console.log(`🆔 Edit ID: ${editId}`);
+      console.log(`⚠️  DAO Proposal submitted. Voting may be required before execution.`);
+    } else {
+      // Personal Space: Direct publish
+      const result = await personalSpace.publishEdit({
+        name: `Import ${INGREDIENT_LIMIT ? `(Limit ${INGREDIENT_LIMIT})` : '(All)'}${CONNECTED_ONLY ? ' [Connected Only]' : ''}`,
+        spaceId: spaceId!,
+        ops: allOps,
+        author: spaceId!,
+        network: "TESTNET",
+      });
+      cid = result.cid;
+      editId = result.editId;
+      to = result.to;
+      calldata = result.calldata;
+      console.log(`📝 IPFS CID: ${cid}`);
+      console.log(`🆔 Edit ID: ${editId}`);
+    }
+
     console.log(`📬 Target: ${to}`);
 
     const txHash = await smartAccount!.sendTransaction({ to, data: calldata });
