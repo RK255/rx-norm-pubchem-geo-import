@@ -79,11 +79,17 @@ const TTY_TO_RELATION_ID: { [key: string]: string } = {
   'df': RELATION_IDS.DOSE_FORMS,
 };
 
+// --- HELPER: Convert space ID to hex ---
+function spaceIdToHex(spaceId: string): `0x${string}` {
+  const clean = spaceId.replace(/-/g, '');
+  return `0x${clean}` as `0x${string}`;
+}
+
 // --- DETECT SPACE TYPE ---
-async function detectSpaceType(spaceId: string): Promise<'PERSONAL' | 'DAO'> {
+async function detectSpaceType(spaceId: string): Promise<{ type: 'PERSONAL' | 'DAO'; address?: string }> {
   const query = `
     query GetSpaceType {
-      space(id: "${spaceId}") { type }
+      space(id: "${spaceId}") { id type address }
     }
   `;
   
@@ -118,8 +124,16 @@ async function detectSpaceType(spaceId: string): Promise<'PERSONAL' | 'DAO'> {
     process.exit(1);
   }
   
-  console.log(`📋 Detected space type: ${type}`);
-  return type as 'PERSONAL' | 'DAO';
+  if (type === 'DAO') {
+    console.log(`📋 Detected space type: ${type} (address: ${json.data.space.address})`);
+  } else {
+    console.log(`📋 Detected space type: ${type}`);
+  }
+  
+  return {
+    type: type as 'PERSONAL' | 'DAO',
+    address: json.data.space.address as string | undefined
+  };
 }
 
 // --- PRE-FLIGHT CHECK ---
@@ -245,6 +259,7 @@ async function runImport() {
   // 1. Validate Environment
   const privateKeyRaw = process.env.GEO_WALLET_PRIVATE_KEY;
   const spaceId = process.env.GEO_SPACE_ID;
+  const personalSpaceId = process.env.GEO_PERSONAL_SPACE_ID;
   
   if (DRY_RUN) {
     if (!spaceId) {
@@ -261,7 +276,14 @@ async function runImport() {
   const privateKey = privateKeyRaw?.startsWith('0x') ? privateKeyRaw as Hex : `0x${privateKeyRaw}` as Hex;
 
   // 2. Detect space type
-  const spaceType = await detectSpaceType(spaceId!);
+  const spaceInfo = await detectSpaceType(spaceId!);
+
+  // For DAO spaces, require personal space ID
+  if (spaceInfo.type === 'DAO' && !personalSpaceId) {
+    console.error('❌ GEO_PERSONAL_SPACE_ID required in .env for DAO spaces.');
+    console.error('   DAO proposals must be signed by your personal space.');
+    process.exit(1);
+  }
 
   // 3. Init Wallet (skip for dry-run)
   let smartAccount: Awaited<ReturnType<typeof getSmartAccountWalletClient>> | null = null;
@@ -399,7 +421,7 @@ async function runImport() {
       timestamp: new Date().toISOString(),
       batchName: `Import ${INGREDIENT_LIMIT ? `Limit ${INGREDIENT_LIMIT}` : 'All'}${CONNECTED_ONLY ? ' (Connected Only)' : ''}`,
       spaceId: spaceId,
-      spaceType: spaceType,
+      spaceType: spaceInfo.type,
       entityIds: allEntities.map(e => e.id),
       entityCount: allEntities.length,
       opsCount: allOps.length,
@@ -434,12 +456,16 @@ async function runImport() {
   console.log('PUBLISH PREVIEW');
   console.log('='.repeat(60));
   console.log(`   Space ID: ${spaceId}`);
-  console.log(`   Space Type: ${spaceType}`);
+  console.log(`   Space Type: ${spaceInfo.type}`);
+  if (spaceInfo.type === 'DAO') {
+    console.log(`   DAO Address: ${spaceInfo.address}`);
+    console.log(`   Author: ${personalSpaceId} (your personal space)`);
+  }
   console.log(`   Ingredients: ${ingredientsToImport.length}`);
   console.log(`   Total entities: ${allEntities.length}`);
   console.log(`   Operations: ${allOps.length}`);
   console.log(`   Skipped (already exist): ${skippedCount}`);
-  if (spaceType === 'DAO') {
+  if (spaceInfo.type === 'DAO') {
     console.log(`   ⚠️  DAO Space: This will create a PROPOSAL that requires voting.`);
   }
   console.log('='.repeat(60));
@@ -451,20 +477,22 @@ async function runImport() {
   }
 
   // 13. Publish - Route based on space type
-  console.log(`\n🚀 Publishing operations to Geo (${spaceType} space)...`);
+  console.log(`\n🚀 Publishing operations to Geo (${spaceInfo.type} space)...`);
   try {
     let cid: string;
     let editId: string;
-    let to: string;
-    let calldata: string;
+    let to: `0x${string}`;
+    let calldata: `0x${string}`;
 
-    if (spaceType === 'DAO') {
+    if (spaceInfo.type === 'DAO') {
       // DAO Space: Create a proposal
       const result = await daoSpace.proposeEdit({
         name: `Import ${INGREDIENT_LIMIT ? `(Limit ${INGREDIENT_LIMIT})` : '(All)'}${CONNECTED_ONLY ? ' [Connected Only]' : ''}`,
-        spaceId: spaceId!,
         ops: allOps,
-        author: spaceId!,
+        author: spaceIdToHex(personalSpaceId!),
+        daoSpaceAddress: spaceInfo.address as `0x${string}`,
+        callerSpaceId: spaceIdToHex(personalSpaceId!),
+        daoSpaceId: spaceIdToHex(spaceId!),
         network: "TESTNET",
       });
       cid = result.cid;
@@ -473,14 +501,15 @@ async function runImport() {
       calldata = result.calldata;
       console.log(`📝 Proposal created. CID: ${cid}`);
       console.log(`🆔 Edit ID: ${editId}`);
+      console.log(`🗳️  Proposal ID: ${result.proposalId}`);
       console.log(`⚠️  DAO Proposal submitted. Voting may be required before execution.`);
     } else {
       // Personal Space: Direct publish
       const result = await personalSpace.publishEdit({
         name: `Import ${INGREDIENT_LIMIT ? `(Limit ${INGREDIENT_LIMIT})` : '(All)'}${CONNECTED_ONLY ? ' [Connected Only]' : ''}`,
-        spaceId: spaceId!,
+        spaceId: spaceIdToHex(spaceId!),
         ops: allOps,
-        author: spaceId!,
+        author: spaceIdToHex(spaceId!),
         network: "TESTNET",
       });
       cid = result.cid;

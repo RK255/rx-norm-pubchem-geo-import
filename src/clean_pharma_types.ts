@@ -31,7 +31,7 @@ async function runClean() {
   // 1. Identify Targets
   const data = await queryGeo(`
     query GetPharmaEntities {
-      values(filter: { spaceId: { is: "${SPACE_ID}" }, propertyId: { is: "${RX_CUI_PROPERTY_ID}" } }) {
+      values(filter: { spaceId: { is: "${SPACE_ID}" }, propertyId: { is: "${PROPERTY_IDS.RXCUI}" } }) {
         entityId
       }
     }

@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Graph, personalSpace, daoSpace, getSmartAccountWalletClient } from '@geoprotocol/geo-sdk';
+import { PROPERTY_IDS } from './constants';
 import type { Hex } from 'viem';
 
 // --- ESM __dirname FIX ---
@@ -28,11 +29,17 @@ if (!path.isAbsolute(manifestPath)) {
 // --- CONFIGURATION ---
 const API_URL = "https://testnet-api.geobrowser.io/graphql";
 
+// --- HELPER: Convert space ID to hex ---
+function spaceIdToHex(spaceId: string): `0x${string}` {
+  const clean = spaceId.replace(/-/g, '');
+  return `0x${clean}` as `0x${string}`;
+}
+
 // --- DETECT SPACE TYPE ---
-async function detectSpaceType(spaceId: string): Promise<'PERSONAL' | 'DAO'> {
+async function detectSpaceType(spaceId: string): Promise<{ type: 'PERSONAL' | 'DAO'; address?: string }> {
   const query = `
     query GetSpaceType {
-      space(id: "${spaceId}") { type }
+      space(id: "${spaceId}") { id type address }
     }
   `;
   
@@ -67,8 +74,16 @@ async function detectSpaceType(spaceId: string): Promise<'PERSONAL' | 'DAO'> {
     process.exit(1);
   }
   
-  console.log(`📋 Detected space type: ${type}`);
-  return type as 'PERSONAL' | 'DAO';
+  if (type === 'DAO') {
+    console.log(`📋 Detected space type: ${type} (address: ${json.data.space.address})`);
+  } else {
+    console.log(`📋 Detected space type: ${type}`);
+  }
+  
+  return {
+    type: type as 'PERSONAL' | 'DAO',
+    address: json.data.space.address as string | undefined
+  };
 }
 
 // --- GQL HELPER ---
@@ -98,6 +113,8 @@ async function runRollback() {
 
   // 2. Validate Environment
   const envSpaceId = process.env.GEO_SPACE_ID;
+  const personalSpaceId = process.env.GEO_PERSONAL_SPACE_ID;
+  
   if (!envSpaceId) {
     console.error('❌ GEO_SPACE_ID not found in .env');
     process.exit(1);
@@ -113,7 +130,14 @@ async function runRollback() {
   }
 
   // 3. Detect space type
-  const spaceType = await detectSpaceType(envSpaceId);
+  const spaceInfo = await detectSpaceType(envSpaceId);
+
+  // For DAO spaces, require personal space ID
+  if (spaceInfo.type === 'DAO' && !personalSpaceId) {
+    console.error('❌ GEO_PERSONAL_SPACE_ID required in .env for DAO spaces.');
+    console.error('   DAO proposals must be signed by your personal space.');
+    process.exit(1);
+  }
 
   console.log(`🧹 Starting Rollback for Batch: ${batchName}`);
   console.log(`🎯 Target Entities: ${entityIds.length}`);
@@ -195,7 +219,7 @@ async function runRollback() {
   }
 
   // 6. Publish
-  console.log(`🚀 Publishing Rollback (${spaceType} space)...`);
+  console.log(`🚀 Publishing Rollback (${spaceInfo.type} space)...`);
   const privateKeyRaw = process.env.GEO_WALLET_PRIVATE_KEY;
   if (!privateKeyRaw) throw new Error("Missing private key");
   const privateKey = privateKeyRaw.startsWith('0x') ? privateKeyRaw as Hex : `0x${privateKeyRaw}` as Hex;
@@ -203,15 +227,17 @@ async function runRollback() {
 
   let cid: string;
   let editId: string;
-  let to: string;
-  let calldata: string;
+  let to: `0x${string}`;
+  let calldata: `0x${string}`;
 
-  if (spaceType === 'DAO') {
+  if (spaceInfo.type === 'DAO') {
     const result = await daoSpace.proposeEdit({
       name: `Rollback: ${batchName}`,
-      spaceId: envSpaceId,
       ops: allOps,
-      author: envSpaceId,
+      author: spaceIdToHex(personalSpaceId!),
+      daoSpaceAddress: spaceInfo.address as `0x${string}`,
+      callerSpaceId: spaceIdToHex(personalSpaceId!),
+      daoSpaceId: spaceIdToHex(envSpaceId),
       network: "TESTNET",
     });
     cid = result.cid;
@@ -220,13 +246,14 @@ async function runRollback() {
     calldata = result.calldata;
     console.log(`📝 Proposal created. CID: ${cid}`);
     console.log(`🆔 Edit ID: ${editId}`);
+    console.log(`🗳️  Proposal ID: ${result.proposalId}`);
     console.log(`⚠️  DAO Proposal submitted. Voting may be required before execution.`);
   } else {
     const result = await personalSpace.publishEdit({
       name: `Rollback: ${batchName}`,
-      spaceId: envSpaceId,
+      spaceId: spaceIdToHex(envSpaceId),
       ops: allOps,
-      author: envSpaceId,
+      author: spaceIdToHex(envSpaceId),
       network: "TESTNET",
     });
     cid = result.cid;
