@@ -45,11 +45,16 @@ Ingests RxNorm data into Geo with auto-deduplication.
 
 **Examples:**
 
-bun run import                          # Import all 2,893 ingredients
-bun run import --connected-only         # Import only ~1,790 connected ingredients
-bun run import --limit 50               # Test with first 50 ingredients
-bun run import --limit 10 --force       # Force import 10 (skip dedup check)
-bun run import --dry-run                # Preview import
+bun run import
+ # Import all 2,893 ingredients
+bun run import --connected-only
+ # Import only ~1,790 connected ingredients
+bun run import --limit 50
+ # Test with first 50 ingredients
+bun run import --limit 10 --force
+ # Force import 10 (skip dedup check)
+bun run import --dry-run
+ # Preview import
 
 ### `bun run rollback`
 
