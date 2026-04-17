@@ -11,3 +11,4 @@ data_to_publish/manifest_[0-9]*.json
 data_to_publish/dry_run_ops_*.json
 data_to_publish/extracted_data_ops.txt
 data_to_publish/full_geo_extraction.json
+data_to_publish/
