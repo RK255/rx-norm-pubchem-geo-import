@@ -11,6 +11,7 @@ export const TYPE_IDS = {
   SCD: 'a844e0f3a48d4e82b234da893aee4291',
   MIN: 'f0250a1cc9e8431980b3e9d7661e08f9',
   PIN: '4ba36be2740b4f36aa7c31512869bb3c',
+  NDC: '285d054d3b524cd2bce119f2d796b259', // NEW: NDC Entity Type
 } as const;
 
 // =============================================================================
@@ -23,6 +24,7 @@ export const RELATION_IDS = {
   SEMANTIC_CLINICAL_DRUGS: 'c1617a1e32844adeb5ff4c4445dc2ba6',
   MULTIPLE_INGREDIENTS: 'e8885ee2b8674952b2538ad4eee058e2',
   PRECISE_INGREDIENTS: '5d5602ac0fe64f4dbdc345c0bdf09d72',
+  NDCS: '199c04685b3c49d3b09cdb32a40459cc', // NEW: SCD/SBD -> NDC relation
 } as const;
 
 // =============================================================================
@@ -34,4 +36,7 @@ export const PROPERTY_IDS = {
   SMILES: '07bc332f2afd4e498d868f4e85ec5cc1',
   INCHI_KEY: '93d0ecbc41df4c668d2fb16172002dcb',
   PMID: '1577e86142964c9484c92cf079e330e1',
+  // TODO: Add these when UUIDs are available
+  // PUBCHEM_CID: '<NEED_UUID>',
+  // SPL_SET_ID: '<NEED_UUID>',
 } as const;

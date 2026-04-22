@@ -4,6 +4,7 @@ dist/
 *.log
 .DS_Store
 Thumbs.db
+/neo4j
 
 # Generated output files (keep examples)
 data_to_publish/dry_run_summary_[0-9]*.txt
@@ -12,3 +13,6 @@ data_to_publish/dry_run_ops_*.json
 data_to_publish/extracted_data_ops.txt
 data_to_publish/full_geo_extraction.json
 data_to_publish/
+archive/
+data_to_publish/*.json
+data_to_publish/*.txt

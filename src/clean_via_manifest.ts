@@ -6,7 +6,7 @@ import { PROPERTY_IDS } from './constants';
 
 // --- CONFIGURATION ---
 const SPACE_ID = process.env.GEO_SPACE_ID;
-const MANIFEST_PATH = 'data_to_publish/manifest_1776818432036.json';
+const MANIFEST_PATH = 'data_to_publish/manifest_v3_1776895510204.json';
 const BATCH_SIZE = 2000; // Increased to 2000 for speed. 5000 might fail due to block gas limits.
 
 async function runManifestClean() {
