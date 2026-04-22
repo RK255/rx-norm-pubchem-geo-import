@@ -489,10 +489,11 @@ async function runImport() {
       const result = await daoSpace.proposeEdit({
         name: `Import ${INGREDIENT_LIMIT ? `(Limit ${INGREDIENT_LIMIT})` : '(All)'}${CONNECTED_ONLY ? ' [Connected Only]' : ''}`,
         ops: allOps,
-        author: spaceIdToHex(personalSpaceId!),
-        daoSpaceAddress: spaceInfo.address as `0x${string}`,
-        callerSpaceId: spaceIdToHex(personalSpaceId!),
-        daoSpaceId: spaceIdToHex(spaceId!),
+        // FIX: Remove 0x prefix from Space IDs (author, callerSpaceId, daoSpaceId)
+        author: personalSpaceId!.replace(/-/g, ''), 
+        daoSpaceAddress: spaceInfo.address as `0x${string}`, // KEEP 0x for Ethereum addresses
+        callerSpaceId: personalSpaceId!.replace(/-/g, ''), 
+        daoSpaceId: spaceId.replace(/-/g, ''), 
         network: "TESTNET",
       });
       cid = result.cid;
@@ -507,9 +508,10 @@ async function runImport() {
       // Personal Space: Direct publish
       const result = await personalSpace.publishEdit({
         name: `Import ${INGREDIENT_LIMIT ? `(Limit ${INGREDIENT_LIMIT})` : '(All)'}${CONNECTED_ONLY ? ' [Connected Only]' : ''}`,
-        spaceId: spaceIdToHex(spaceId!),
+        // FIX: Remove 0x prefix from Space IDs (spaceId, author)
+        spaceId: spaceId.replace(/-/g, ''), 
         ops: allOps,
-        author: spaceIdToHex(spaceId!),
+        author: spaceId.replace(/-/g, ''), // Use raw spaceId for author too
         network: "TESTNET",
       });
       cid = result.cid;
