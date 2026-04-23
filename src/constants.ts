@@ -36,6 +36,8 @@ export const PROPERTY_IDS = {
   SMILES: '07bc332f2afd4e498d868f4e85ec5cc1',
   INCHI_KEY: '93d0ecbc41df4c668d2fb16172002dcb',
   PMID: '1577e86142964c9484c92cf079e330e1',
+  NDC10: 'a7f0c739e65946d493993de764fe497e',
+  NDC11: '1d9b05ec0ad24423a71257f9ad2e5a26',
   // TODO: Add these when UUIDs are available
   // PUBCHEM_CID: '<NEED_UUID>',
   // SPL_SET_ID: '<NEED_UUID>',

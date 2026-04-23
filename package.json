@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "import": "tsx src/import_extracted_data.ts",
+    "import": "tsx src/import_extracted_data_v4.ts",
     "import:dist": "node dist/import_extracted_data.js",
     "rollback": "tsx src/rollback_selective.ts",
     "rollback:dist": "node dist/rollback_selective.js",

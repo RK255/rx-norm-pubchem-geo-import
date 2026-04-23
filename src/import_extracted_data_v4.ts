@@ -1,4 +1,4 @@
-// src/import_extracted_data_v3.ts
+// src/import_extracted_data_v4.ts
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
@@ -32,7 +32,7 @@ const DRY_RUN = args.includes('--dry-run');
 
 // --- CONFIGURATION ---
 const DATA_DIR = path.join(__dirname, '..', 'data_to_publish');
-const MASTER_FILE = path.join(DATA_DIR, 'full_geo_extraction_v3.json');
+const MASTER_FILE = path.join(DATA_DIR, 'full_geo_extraction_v3.jsonl');
 const API_URL = "https://testnet-api.geobrowser.io/graphql";
 
 // --- TYPES ---
@@ -45,6 +45,8 @@ interface Entity {
   SMILES?: string;
   PMID?: string;
   INCHIKEY?: string;
+  NDC10?: string;
+  NDC11?: string;
   [key: string]: any;
 }
 
@@ -69,6 +71,14 @@ function dedupeByKey<T>(arr: T[], key: keyof T): T[] {
     seen.add(val);
     return true;
   });
+}
+
+// --- HELPER: Format NDC11 (11 digits no hyphens) to display format (5-4-2 with hyphens) ---
+function formatNdc11(ndc11NoHyphens: string): string {
+  if (!ndc11NoHyphens || ndc11NoHyphens.length !== 11) {
+    return ndc11NoHyphens;
+  }
+  return `${ndc11NoHyphens.slice(0, 5)}-${ndc11NoHyphens.slice(5, 9)}-${ndc11NoHyphens.slice(9, 11)}`;
 }
 
 // --- DETECT SPACE TYPE ---
@@ -113,44 +123,74 @@ async function detectSpaceType(spaceId: string): Promise<{ type: 'PERSONAL' | 'D
   };
 }
 
-// --- PRE-FLIGHT CHECK ---
+// --- PRE-FLIGHT CHECK (FIXED: Proper spaceIds filter in GraphQL) ---
 async function fetchExistingEntityIds(spaceId: string): Promise<Set<string>> {
   console.log(`🔍 Pre-flight check: Fetching existing entities...`);
   const existingIds = new Set<string>();
-  const RX_CUI_PROPERTY_ID = PROPERTY_IDS.RXCUI;
+  
+  const typeIds = [
+    { id: TYPE_IDS.IN, name: 'IN' },
+    { id: TYPE_IDS.BN, name: 'BN' },
+    { id: TYPE_IDS.DF, name: 'DF' },
+    { id: TYPE_IDS.SCD, name: 'SCD' },
+    { id: TYPE_IDS.SBD, name: 'SBD' },
+    { id: TYPE_IDS.MIN, name: 'MIN' },
+    { id: TYPE_IDS.PIN, name: 'PIN' },
+    { id: TYPE_IDS.NDC, name: 'NDC' },
+  ];
 
-  try {
-    const query = `
-      query GetPharmaEntities {
-        values(filter: { spaceId: { is: "${spaceId}" }, propertyId: { is: "${RX_CUI_PROPERTY_ID}" } }) {
-          entityId
+  for (const type of typeIds) {
+    let batchNum = 0;
+    
+    while (true) {
+      batchNum++;
+      
+      // FIXED: spaceIds filter in GraphQL query - no JavaScript filtering needed
+      const query = `{
+        entities(filter: { 
+          spaceIds: { is: ["${spaceId}"] }, 
+          typeIds: { in: ["${type.id}"] } 
+        }, first: 1000) {
+          id
         }
+      }`;
+      
+      try {
+        const res = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query }),
+        });
+        
+        const json = await res.json();
+        
+        if (json.errors) {
+          console.error(`  ⚠️  ${type.name} failed:`, json.errors[0].message);
+          break;
+        }
+        
+        const entities = json.data?.entities || [];
+        
+        // No JavaScript filtering needed - GraphQL already filtered by space!
+        entities.forEach((e: any) => {
+          existingIds.add(e.id.replace(/-/g, ''));
+        });
+        
+        if (entities.length > 0) {
+          console.log(`  ${type.name} batch ${batchNum}: ${entities.length} entities (total: ${existingIds.size})`);
+        }
+        
+        if (entities.length < 1000) break;
+        
+        await new Promise(r => setTimeout(r, 500));
+      } catch (e: any) {
+        console.error(`  ⚠️  ${type.name} error:`, e.message);
+        break;
       }
-    `;
-    
-    const res = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query }),
-    });
-    
-    const json = await res.json() as { errors?: any[]; data?: any };
-
-    if (json.errors) {
-      console.error('⚠️  Warning: Could not fetch existing entities:');
-      json.errors.forEach((e: any) => console.error(`   ${e.message}`));
-      console.log('   Proceeding without pre-flight check (all entities will be created).');
-      return existingIds;
     }
-
-    const values = json.data?.values || [];
-    values.forEach((v: any) => existingIds.add(v.entityId.replace(/-/g, '')));
-    console.log(`📦 Found ${existingIds.size} existing entities.`);
-  } catch (e) {
-    console.error('⚠️  Warning: Pre-flight fetch failed:', (e as Error).message);
-    console.log('   Proceeding without pre-flight check (all entities will be created).');
   }
   
+  console.log(`📦 Found ${existingIds.size} total existing entities.`);
   return existingIds;
 }
 
@@ -206,7 +246,7 @@ function generateSummary(entities: Entity[], ingredients: any[]): string {
   entities.slice(0, 10).forEach((e, i) => {
     const typeName = TYPE_NAMES[e.typeId] || 'Unknown';
     const relCount = e.relations ? Object.values(e.relations).reduce((sum, s) => sum + (s instanceof Set ? s.size : 0), 0) : 0;
-    lines.push(`  ${i + 1}. ${e.name} [${typeName}] (RxCUI: ${e.rxcui}, Relations: ${relCount})`);
+    lines.push(`  ${i + 1}. ${e.name} [${typeName}] (ID: ${e.rxcui}, Relations: ${relCount})`);
   });
 
   if (entities.length > 10) {
@@ -223,6 +263,7 @@ function generateUuid(rxcui: string, typeId: string): string {
   return [hash.substring(0, 8), hash.substring(8, 12), hash.substring(12, 16), hash.substring(16, 20), hash.substring(20, 32)].join('-');
 }
 
+// --- NDC UUID GENERATION ---
 function generateNdcUuid(ndcCode: string): string {
   const seed = `${TYPE_IDS.NDC}:${ndcCode}`;
   const hash = crypto.createHash('sha256').update(seed).digest('hex');
@@ -246,9 +287,23 @@ function addRelation(entity: Entity, relationId: string, targetId: string): void
   entity.relations[relationId].add(targetId);
 }
 
+// --- HELPER: Create NDC entity with correct naming ---
+function createNdcEntity(ndcData: any, entityMap: Map<string, Entity>): Entity {
+  const ndcCanonical = ndcData.ndc11_no_hyphens;
+  const ndcId = generateNdcUuid(ndcCanonical);
+  const ndcDisplayName = formatNdc11(ndcCanonical);
+  
+  const ndcEntity = getEntity(ndcId, TYPE_IDS.NDC, ndcCanonical, ndcDisplayName, entityMap);
+  
+  if (ndcData.ndc10) ndcEntity.NDC10 = ndcData.ndc10;
+  if (ndcData.ndc11_no_hyphens) ndcEntity.NDC11 = ndcData.ndc11_no_hyphens;
+  
+  return ndcEntity;
+}
+
 async function runImport() {
   const limitStr = INGREDIENT_LIMIT ? ` (Limit: ${INGREDIENT_LIMIT})` : ' (All Data)';
-  console.log(`🚀 Starting Import V3${limitStr}...`);
+  console.log(`🚀 Starting Import V4${limitStr}...`);
   if (FORCE_PUBLISH) console.warn('⚠️  --force flag detected: Skipping existence check!');
   if (CONNECTED_ONLY) console.log('🧹 --connected-only flag detected: Filtering isolated ingredients.');
   if (DRY_RUN) console.log('🔍 --dry-run flag detected: Preview mode (no publish).');
@@ -287,17 +342,29 @@ async function runImport() {
     console.log('✅ Smart Account Initialized.');
   }
 
-  // 4. Fetch Existing IDs
+  // 4. Fetch Existing IDs (using proper spaceIds filter)
   const existingIds = (DRY_RUN || FORCE_PUBLISH) ? new Set<string>() : await fetchExistingEntityIds(spaceId!);
 
-  // 5. Load Data
+  // 5. Load Data (JSONL format)
   if (!fs.existsSync(MASTER_FILE)) {
     console.error(`❌ Master file not found: ${MASTER_FILE}`);
     process.exit(1);
   }
   const rawData = fs.readFileSync(MASTER_FILE, 'utf-8');
-  const allIngredients: any[] = JSON.parse(rawData);
-  console.log(`📦 Loaded ${allIngredients.length} total ingredients from Master V3.`);
+  
+  const allIngredients: any[] = rawData
+    .split('\n')
+    .filter(line => line.trim())
+    .map((line, idx) => {
+      try {
+        return JSON.parse(line);
+      } catch (e) {
+        console.error(`❌ Failed to parse line ${idx + 1}:`, line.substring(0, 100));
+        throw e;
+      }
+    });
+  
+  console.log(`📦 Loaded ${allIngredients.length} total ingredients from Master V4 (JSONL format).`);
 
   // 6. Slice & Filter
   let ingredientsToImport = INGREDIENT_LIMIT ? allIngredients.slice(0, INGREDIENT_LIMIT) : allIngredients;
@@ -349,17 +416,15 @@ async function runImport() {
       const minEntity = getEntity(minId, TYPE_IDS.MIN, minData.rxcui, minData.name, entityMap);
       addRelation(ingEntity, RELATION_IDS.MULTIPLE_INGREDIENTS, minId);
 
-      // Process ingredients in MIN (FIX: Skip parent ingredient to avoid duplicate)
       const minIngredients = minData.ingredients || [];
       minIngredients.forEach((minIng: any) => {
-        if (minIng.rxcui === ing.rxcui) return; // ← SKIP PARENT INGREDIENT
+        if (minIng.rxcui === ing.rxcui) return;
         
         const minIngId = generateUuid(minIng.rxcui, TYPE_IDS.IN);
         getEntity(minIngId, TYPE_IDS.IN, minIng.rxcui, minIng.name, entityMap);
         addRelation(minEntity, RELATION_IDS.MULTIPLE_INGREDIENTS, minIngId);
       });
 
-      // Process Combo SCDs
       const comboScdList = dedupeByKey(minData.combo_scds || [], 'rxcui');
       if ((minData.combo_scds || []).length !== comboScdList.length) {
         dedupeStats.combo_scd += (minData.combo_scds || []).length - comboScdList.length;
@@ -374,13 +439,11 @@ async function runImport() {
         if ((comboScd.ndcs || []).length !== ndcList.length) dedupeStats.ndc += (comboScd.ndcs || []).length - ndcList.length;
 
         ndcList.forEach((ndcData: any) => {
-          const ndcId = generateNdcUuid(ndcData.ndc);
-          getEntity(ndcId, TYPE_IDS.NDC, ndcData.ndc, ndcData.ndc, entityMap);
-          addRelation(comboScdEntity, RELATION_IDS.NDCS, ndcId);
+          const ndcEntity = createNdcEntity(ndcData, entityMap);
+          addRelation(comboScdEntity, RELATION_IDS.NDCS, ndcEntity.id);
         });
       });
 
-      // Process Combo SBDs
       const comboSbdList = dedupeByKey(minData.combo_sbds || [], 'rxcui');
       if ((minData.combo_sbds || []).length !== comboSbdList.length) {
         dedupeStats.combo_sbd += (minData.combo_sbds || []).length - comboSbdList.length;
@@ -395,9 +458,8 @@ async function runImport() {
         if ((comboSbd.ndcs || []).length !== ndcList.length) dedupeStats.ndc += (comboSbd.ndcs || []).length - ndcList.length;
 
         ndcList.forEach((ndcData: any) => {
-          const ndcId = generateNdcUuid(ndcData.ndc);
-          getEntity(ndcId, TYPE_IDS.NDC, ndcData.ndc, ndcData.ndc, entityMap);
-          addRelation(comboSbdEntity, RELATION_IDS.NDCS, ndcId);
+          const ndcEntity = createNdcEntity(ndcData, entityMap);
+          addRelation(comboSbdEntity, RELATION_IDS.NDCS, ndcEntity.id);
         });
 
         if (comboSbd.brand_name) {
@@ -411,21 +473,18 @@ async function runImport() {
       });
     });
 
-    // Process PIN
     pinList.forEach((pinData: any) => {
       const pinId = generateUuid(pinData.rxcui, TYPE_IDS.PIN);
       getEntity(pinId, TYPE_IDS.PIN, pinData.rxcui, pinData.name, entityMap);
       addRelation(ingEntity, RELATION_IDS.PRECISE_INGREDIENTS, pinId);
     });
 
-    // Process DF
     dfList.forEach((dfData: any) => {
       const dfId = generateUuid(dfData.rxcui, TYPE_IDS.DF);
       getEntity(dfId, TYPE_IDS.DF, dfData.rxcui, dfData.name, entityMap);
       addRelation(ingEntity, RELATION_IDS.DOSE_FORMS, dfId);
     });
 
-    // Process SCD + NDCs
     scdList.forEach((scdData: any) => {
       const scdId = generateUuid(scdData.rxcui, TYPE_IDS.SCD);
       const scdEntity = getEntity(scdId, TYPE_IDS.SCD, scdData.rxcui, scdData.name, entityMap);
@@ -435,13 +494,11 @@ async function runImport() {
       if ((scdData.ndcs || []).length !== ndcList.length) dedupeStats.ndc += (scdData.ndcs || []).length - ndcList.length;
 
       ndcList.forEach((ndcData: any) => {
-        const ndcId = generateNdcUuid(ndcData.ndc);
-        getEntity(ndcId, TYPE_IDS.NDC, ndcData.ndc, ndcData.ndc, entityMap);
-        addRelation(scdEntity, RELATION_IDS.NDCS, ndcId);
+        const ndcEntity = createNdcEntity(ndcData, entityMap);
+        addRelation(scdEntity, RELATION_IDS.NDCS, ndcEntity.id);
       });
     });
 
-    // Process SBD + NDCs + Brand (single-ingredient)
     sbdList.forEach((sbdData: any) => {
       const sbdId = generateUuid(sbdData.rxcui, TYPE_IDS.SBD);
       const sbdEntity = getEntity(sbdId, TYPE_IDS.SBD, sbdData.rxcui, sbdData.name, entityMap);
@@ -451,9 +508,8 @@ async function runImport() {
       if ((sbdData.ndcs || []).length !== ndcList.length) dedupeStats.ndc += (sbdData.ndcs || []).length - ndcList.length;
 
       ndcList.forEach((ndcData: any) => {
-        const ndcId = generateNdcUuid(ndcData.ndc);
-        getEntity(ndcId, TYPE_IDS.NDC, ndcData.ndc, ndcData.ndc, entityMap);
-        addRelation(sbdEntity, RELATION_IDS.NDCS, ndcId);
+        const ndcEntity = createNdcEntity(ndcData, entityMap);
+        addRelation(sbdEntity, RELATION_IDS.NDCS, ndcEntity.id);
       });
 
       if (sbdData.brand_name) {
@@ -463,7 +519,6 @@ async function runImport() {
       }
     });
 
-    // Process BN (single-ingredient brands)
     bnList.forEach((bnData: any) => {
       const bnId = generateUuid(bnData.rxcui, TYPE_IDS.BN);
       getEntity(bnId, TYPE_IDS.BN, bnData.rxcui, bnData.name, entityMap);
@@ -473,19 +528,12 @@ async function runImport() {
     });
   });
 
-  // Report deduplication stats
   const totalDupes = Object.values(dedupeStats).reduce((a, b) => a + b, 0);
   if (totalDupes > 0) {
     console.log(`📊 Deduplication stats:`);
-    if (dedupeStats.df > 0) console.log(`   Dose Forms: ${dedupeStats.df} duplicates removed`);
-    if (dedupeStats.scd > 0) console.log(`   SCDs: ${dedupeStats.scd} duplicates removed`);
-    if (dedupeStats.sbd > 0) console.log(`   SBDs: ${dedupeStats.sbd} duplicates removed`);
-    if (dedupeStats.bn > 0) console.log(`   Brand Names: ${dedupeStats.bn} duplicates removed`);
-    if (dedupeStats.pin > 0) console.log(`   PINs: ${dedupeStats.pin} duplicates removed`);
-    if (dedupeStats.min > 0) console.log(`   MINs: ${dedupeStats.min} duplicates removed`);
-    if (dedupeStats.ndc > 0) console.log(`   NDCs: ${dedupeStats.ndc} duplicates removed`);
-    if (dedupeStats.combo_scd > 0) console.log(`   Combo SCDs: ${dedupeStats.combo_scd} duplicates removed`);
-    if (dedupeStats.combo_sbd > 0) console.log(`   Combo SBDs: ${dedupeStats.combo_sbd} duplicates removed`);
+    Object.entries(dedupeStats).forEach(([key, val]) => {
+      if (val > 0) console.log(`   ${key}: ${val} duplicates removed`);
+    });
   }
 
   const allEntities = Array.from(entityMap.values());
@@ -494,7 +542,6 @@ async function runImport() {
 
   console.log(`🔄 Generating operations for ${allEntities.length} total entities...`);
 
-  // Generate Operations
   let skippedCount = 0;
   allEntities.forEach((entity) => {
     const normalizedId = entity.id.replace(/-/g, '');
@@ -509,6 +556,11 @@ async function runImport() {
     
     if (entity.typeId !== TYPE_IDS.NDC) {
       values.push({ property: PROPERTY_IDS.RXCUI, type: 'text', value: entity.rxcui });
+    }
+    
+    if (entity.typeId === TYPE_IDS.NDC) {
+      if (entity.NDC10) values.push({ property: PROPERTY_IDS.NDC10, type: 'text', value: entity.NDC10 });
+      if (entity.NDC11) values.push({ property: PROPERTY_IDS.NDC11, type: 'text', value: entity.NDC11 });
     }
     
     if (entity.typeId === TYPE_IDS.IN) {
@@ -542,19 +594,18 @@ async function runImport() {
     console.log(`   ⏭️  Skipped ${skippedCount} entities (already exist on-chain).`);
   }
 
-  // Save artifacts
   const timestamp = Date.now();
 
   if (DRY_RUN) {
     const summary = generateSummary(allEntities, ingredientsToImport);
-    const summaryPath = path.join(DATA_DIR, `dry_run_summary_v3_${timestamp}.txt`);
+    const summaryPath = path.join(DATA_DIR, `dry_run_summary_v4_${timestamp}.txt`);
     fs.writeFileSync(summaryPath, summary);
     console.log(`\n💾 Saved summary to: ${summaryPath}`);
   } else {
-    const manifestPath = path.join(DATA_DIR, `manifest_v3_${timestamp}.json`);
+    const manifestPath = path.join(DATA_DIR, `manifest_v4_${timestamp}.json`);
     const manifest = {
       timestamp: new Date().toISOString(),
-      batchName: `Import V3 ${INGREDIENT_LIMIT ? `Limit ${INGREDIENT_LIMIT}` : 'All'}${CONNECTED_ONLY ? ' (Connected Only)' : ''}`,
+      batchName: `Import V4 ${INGREDIENT_LIMIT ? `Limit ${INGREDIENT_LIMIT}` : 'All'}${CONNECTED_ONLY ? ' (Connected Only)' : ''}`,
       spaceId: spaceId,
       spaceType: spaceInfo.type,
       entityIds: allEntities.map(e => e.id),
@@ -567,7 +618,6 @@ async function runImport() {
     console.log(`\n💾 Saved manifest to: ${manifestPath}`);
   }
 
-  // DRY RUN EXIT
   if (DRY_RUN) {
     console.log('\n' + '='.repeat(60));
     console.log('DRY RUN COMPLETE');
@@ -580,13 +630,11 @@ async function runImport() {
     return;
   }
 
-  // No new entities
   if (allOps.length === 0) {
     console.log('\n✅ No new entities to publish. Everything is up to date.');
     return;
   }
 
-  // Interactive Confirmation
   console.log('\n' + '='.repeat(60));
   console.log('PUBLISH PREVIEW');
   console.log('='.repeat(60));
@@ -611,7 +659,6 @@ async function runImport() {
     return;
   }
 
-  // Publish
   console.log(`\n🚀 Publishing operations to Geo (${spaceInfo.type} space)...`);
   try {
     let cid: string;
@@ -621,7 +668,7 @@ async function runImport() {
 
     if (spaceInfo.type === 'DAO') {
       const result = await daoSpace.proposeEdit({
-        name: `Import V3 ${INGREDIENT_LIMIT ? `(Limit ${INGREDIENT_LIMIT})` : '(All)'}${CONNECTED_ONLY ? ' [Connected Only]' : ''}`,
+        name: `Import V4 ${INGREDIENT_LIMIT ? `(Limit ${INGREDIENT_LIMIT})` : '(All)'}${CONNECTED_ONLY ? ' [Connected Only)' : ''}`,
         ops: allOps,
         author: personalSpaceId!.replace(/-/g, ''),
         daoSpaceAddress: spaceInfo.address as `0x${string}`,
@@ -638,7 +685,7 @@ async function runImport() {
       console.log(`🗳️  Proposal ID: ${result.proposalId}`);
     } else {
       const result = await personalSpace.publishEdit({
-        name: `Import V3 ${INGREDIENT_LIMIT ? `(Limit ${INGREDIENT_LIMIT})` : '(All)'}${CONNECTED_ONLY ? ' [Connected Only]' : ''}`,
+        name: `Import V4 ${INGREDIENT_LIMIT ? `(Limit ${INGREDIENT_LIMIT})` : '(All)'}${CONNECTED_ONLY ? ' [Connected Only)' : ''}`,
         spaceId: spaceId.replace(/-/g, ''),
         ops: allOps,
         author: spaceId.replace(/-/g, ''),

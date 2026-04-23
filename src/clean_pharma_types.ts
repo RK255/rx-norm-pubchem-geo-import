@@ -1,142 +1,191 @@
+// src/delete_all_pharma.ts
 import 'dotenv/config';
 import { Graph, personalSpace, getSmartAccountWalletClient } from '@geoprotocol/geo-sdk';
 import type { Hex } from 'viem';
-import { TYPE_IDS, PROPERTY_IDS } from './constants'; // FIXED: Removed the extra 'src/'
+import { TYPE_IDS } from './constants';
 
-// --- CONFIGURATION ---
 const API_URL = "https://testnet-api.geobrowser.io/graphql";
 const SPACE_ID = process.env.GEO_SPACE_ID;
+const BATCH_SIZE = 500;
 
-// --- GQL HELPER ---
-async function queryGeo(query: string) {
-  const res = await fetch(API_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query }),
-  });
-  const json = await res.json() as { errors?: any[]; data?: any };
+const FORCE_DELETE = process.argv.includes('--force');
+const DRY_RUN = process.argv.includes('--dry-run');
+
+const PHARMA_TYPES = [
+  { id: TYPE_IDS.IN, name: 'Ingredient' },
+  { id: TYPE_IDS.BN, name: 'Brand' },
+  { id: TYPE_IDS.DF, name: 'Dose Form' },
+  { id: TYPE_IDS.SCD, name: 'SCD' },
+  { id: TYPE_IDS.SBD, name: 'SBD' },
+  { id: TYPE_IDS.MIN, name: 'MIN' },
+  { id: TYPE_IDS.PIN, name: 'PIN' },
+  { id: TYPE_IDS.NDC, name: 'NDC' },
+];
+
+async function fetchEntitiesByType(typeId: string, label: string): Promise<string[]> {
+  const query = `{ entities(filter: { typeIds: { in: ["${typeId}"] } }, first: 1000) { id spaceIds } }`;
+  
+  try {
+    const res = await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
+    });
+    
+    const text = await res.text();
+    const json = JSON.parse(text);
+    
     if (json.errors) {
-    const err = json.errors[0];
-    throw new Error(err.message || JSON.stringify(err));
+      throw new Error(json.errors[0].message);
+    }
+    
+    const entities = json.data?.entities || [];
+    const spaceEntities = entities.filter((e: any) => e.spaceIds?.includes(SPACE_ID));
+    
+    console.log(`  ${label}: ${spaceEntities.length} entities`);
+    return spaceEntities.map((e: any) => e.id);
+  } catch (e: any) {
+    console.error(`  ❌ ${label} failed:`, e.message);
+    return [];
   }
-  return json.data;
 }
 
-async function runClean() {
-  if (!SPACE_ID) throw new Error("GEO_SPACE_ID missing in .env");
+async function deleteEntities(entityIds: string[], typeName: string): Promise<void> {
+  if (entityIds.length === 0) return;
+  
+  if (DRY_RUN) {
+    console.log(`   (dry run: would delete ${entityIds.length})`);
+    return;
+  }
 
-  console.log(`🧹 Starting "Final Clean Sweep" (Proven Method)...`);
-  console.log(`🎯 Strategy: Unset NAME property for all Pharma types.\n`);
+  const privateKeyRaw = process.env.GEO_WALLET_PRIVATE_KEY;
+  if (!privateKeyRaw) throw new Error("GEO_WALLET_PRIVATE_KEY missing");
 
-  const targetTypeIds = Object.values(TYPE_IDS);
+  const smartAccount = await getSmartAccountWalletClient({
+    privateKey: (privateKeyRaw.startsWith('0x') ? privateKeyRaw : `0x${privateKeyRaw}`) as Hex
+  });
 
-  for (const typeId of targetTypeIds) {
-    console.log(`\n🔍 Scanning Type ID: ${typeId}`);
-    
-    // LOOP PROTECTION: Track IDs we have processed
-    const seenIds = new Set<string>();
-    let hasMore = true;
-    let loopCount = 0;
-    const MAX_LOOPS = 5;
+  const deleteOps: any[] = [];
 
-    while (hasMore && loopCount < MAX_LOOPS) {
-      loopCount++;
-      console.log(`   🔄 Loop #${loopCount}...`);
-
-      // 1. QUERY: Get entities of this type
-      const query = `{
-        entities(filter: { typeIds: { in: ["${typeId}"] } }, first: 1000) {
-          id
-        }
-      }`;
-
-      const data = await queryGeo(query);
-      const entities = data.entities || [];
-
-      if (entities.length === 0) {
-        console.log(`   ✅ No entities found for this type.`);
-        hasMore = false;
-        continue;
+  for (const entityId of entityIds) {
+    try {
+      const result = await Graph.deleteEntity({ 
+        id: entityId,
+        spaceId: SPACE_ID
+      });
+      if (result?.ops?.length) {
+        deleteOps.push(...result.ops);
       }
+    } catch (e) {
+      console.error(`  ❌ Failed to generate delete for ${entityId}:`, e);
+    }
+  }
 
-      // 2. FILTER: Only keep entities we haven't processed yet
-      const newEntities = entities.filter((e: any) => !seenIds.has(e.id));
-      
-      if (newEntities.length === 0) {
-        console.log(`   ✅ All entities processed. No new work.`);
-        hasMore = false;
-        continue;
-      }
+  if (deleteOps.length === 0) return;
 
-      console.log(`   🎯 Found ${newEntities.length} new entities. Stripping Names...`);
-      
-      // Mark them as seen immediately
-      newEntities.forEach((e: any) => seenIds.add(e.id));
+  const publishBatches = [];
+  for (let i = 0; i < deleteOps.length; i += BATCH_SIZE) {
+    publishBatches.push(deleteOps.slice(i, i + BATCH_SIZE));
+  }
 
-      // 3. GENERATE OPS: Unset the Name property
-      const ops: any[] = [];
+  console.log(`    Publishing ${publishBatches.length} batches...`);
 
-      for (const entity of newEntities) {
-        const entityId = entity.id;
-        
-        try {
-          // PROVEN STRATEGY: Use updateEntity to unset NAME
-          const result = Graph.updateEntity({ 
-            id: entityId, 
-            unset: [{ property: PROPERTY_IDS.NAME }] 
-          });
-          
-          if (result && result.ops && result.ops.length > 0) {
-            ops.push(...result.ops);
-          } else {
-            // If it returns no ops, it's likely already stripped (shouldn't happen with logic above)
-            console.warn(`   ⚠️  No ops generated for ${entityId}.`);
-          }
-        } catch (e) {
-          console.error(`   ❌ Error updating entity ${entityId}:`, e);
-        }
-      }
-
-      if (ops.length === 0) {
-        console.log(`   ⚠️  No operations generated. Skipping publish.`);
-        continue;
-      }
-
-      // 4. PUBLISH
-      const privateKeyRaw = process.env.GEO_WALLET_PRIVATE_KEY;
-      if (!privateKeyRaw) throw new Error("GEO_WALLET_PRIVATE_KEY missing");
-      
-      const smartAccount = await getSmartAccountWalletClient({
-        privateKey: (privateKeyRaw.startsWith('0x') ? privateKeyRaw : `0x${privateKeyRaw}`) as Hex
+  for (let i = 0; i < publishBatches.length; i++) {
+    const batch = publishBatches[i];
+    try {
+      const { to, calldata } = await personalSpace.publishEdit({
+        name: `Delete ${typeName} batch ${i+1}`,
+        spaceId: SPACE_ID,
+        ops: batch,
+        author: SPACE_ID,
+        network: "TESTNET",
       });
 
-      console.log(`   🚀 Publishing batch (${ops.length} ops)...`);
-      try {
-        const { to, calldata } = await personalSpace.publishEdit({
-          name: `Strip Pharma Names (${typeId})`,
-          spaceId: SPACE_ID,
-          ops: ops,
-          author: SPACE_ID,
-          network: "TESTNET",
-        });
-
-        const txHash = await smartAccount.sendTransaction({ to, data: calldata });
-        console.log(`   ✅ Batch Deleted. TX: ${txHash}`);
-      } catch (txError) {
-        console.error(`   ❌ Transaction failed:`, txError);
-      }
+      await smartAccount.sendTransaction({ to, data: calldata });
+      console.log(`    ✓ Batch ${i+1}/${publishBatches.length} complete (${batch.length} ops)`);
       
-      // 5s delay for propagation
-      console.log(`   ⏳ Waiting 5s...`);
-      await new Promise(r => setTimeout(r, 5000));
-    }
-
-    if (loopCount >= MAX_LOOPS) {
-        console.log(`   ⚠️  Hit max loop limit.`);
+      if (i < publishBatches.length - 1) {
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    } catch (e: any) {
+      console.error(`    ❌ Batch ${i+1} failed:`, e.message);
     }
   }
-
-  console.log('\n🎉 All types processed. Space should be clean.');
 }
 
-runClean().catch(console.error);
+async function runDelete() {
+  if (!SPACE_ID) {
+    console.error('❌ Missing GEO_SPACE_ID');
+    process.exit(1);
+  }
+  
+  const privateKeyRaw = process.env.GEO_WALLET_PRIVATE_KEY;
+  if (!privateKeyRaw && !DRY_RUN) {
+    console.error('❌ Missing GEO_WALLET_PRIVATE_KEY');
+    process.exit(1);
+  }
+  
+  console.log(`🧹 Pharma Entity Purge (Loop Until Empty)`);
+  console.log(`🔍 Space: ${SPACE_ID}`);
+  console.log(`📋 Mode: ${DRY_RUN ? 'DRY RUN' : FORCE_DELETE ? 'DELETE' : 'PREVIEW'}\n`);
+
+  if (!FORCE_DELETE && !DRY_RUN) {
+    console.log('⚠️  PREVIEW MODE - Add --force to actually delete\n');
+  }
+
+  let grandTotal = 0;
+
+  for (const type of PHARMA_TYPES) {
+    console.log(`\n📦 ${type.name}:`);
+    let typeTotal = 0;
+    let batchNum = 0;
+    
+    // LOOP until this type is empty
+    while (true) {
+      batchNum++;
+      const ids = await fetchEntitiesByType(type.id, `batch ${batchNum}`);
+      
+      if (ids.length === 0) {
+        if (typeTotal > 0) {
+          console.log(`   ✅ ${type.name} cleared (${typeTotal} total)`);
+        } else {
+          console.log(`   (none found)`);
+        }
+        break;
+      }
+      
+      if (FORCE_DELETE || DRY_RUN) {
+        await deleteEntities(ids, type.name);
+        typeTotal += ids.length;
+        grandTotal += ids.length;
+        
+        if (DRY_RUN) {
+          break; // Dry run only does one preview batch
+        }
+        
+        // If we got 1000, there might be more
+        if (ids.length === 1000) {
+          console.log(`   🔍 Checking for more ${type.name}...`);
+          await new Promise(r => setTimeout(r, 1500));
+        } else {
+          break; // Less than 1000 means we're done
+        }
+      } else {
+        // Preview mode - just show and move on
+        console.log(`   Found ${ids.length} entities`);
+        break;
+      }
+    }
+    
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  console.log(`\n${'='.repeat(50)}`);
+  console.log(`📊 GRAND TOTAL: ${grandTotal} entities ${DRY_RUN ? 'would be' : 'were'} deleted`);
+  
+  if (!FORCE_DELETE && !DRY_RUN) {
+    console.log(`\n⚠️  Run with --force to execute deletion`);
+  }
+}
+
+runDelete().catch(console.error);
