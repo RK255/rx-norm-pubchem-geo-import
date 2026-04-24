@@ -1,6 +1,7 @@
-// src/delete_ndc_entities.ts
+// src/delete_ndc_entities_fast.ts
 import 'dotenv/config';
-import { Graph, personalSpace, getSmartAccountWalletClient } from '@geoprotocol/geo-sdk';
+import { personalSpace, getSmartAccountWalletClient } from '@geoprotocol/geo-sdk';
+import { parseId, deleteEntity } from '@geoprotocol/grc-20';
 import type { Hex } from 'viem';
 import { TYPE_IDS } from './constants';
 
@@ -11,7 +12,8 @@ const FORCE_DELETE = process.argv.includes('--force');
 const DRY_RUN = process.argv.includes('--dry-run');
 
 const NDC_TYPE_ID = TYPE_IDS.NDC;
-const BATCH_SIZE = 500;
+const PUBLISH_BATCH_SIZE = 500; // Ops per transaction
+const FETCH_PAGE_SIZE = 1000;   // Entities per query
 
 interface NdcEntity {
   id: string;
@@ -26,19 +28,18 @@ async function queryGeo(query: string) {
   });
   
   const text = await res.text();
-  try {
-    const json = JSON.parse(text) as { errors?: any[]; data?: any };
-    if (json.errors) throw new Error(json.errors[0].message);
-    return json.data;
-  } catch (e) {
-    console.error('❌ Raw response:', text.substring(0, 500));
-    throw e;
-  }
+  const json = JSON.parse(text) as { errors?: any[]; data?: any };
+  if (json.errors) throw new Error(json.errors[0].message);
+  return json.data;
 }
 
-async function fetchNdcBatch(): Promise<NdcEntity[]> {
+async function fetchNdcPage(offset: number = 0): Promise<NdcEntity[]> {
   const query = `{
-    entities(filter: { typeIds: { in: ["${NDC_TYPE_ID}"] } }, first: 1000) {
+    entities(
+      filter: { typeIds: { in: ["${NDC_TYPE_ID}"] } }, 
+      first: ${FETCH_PAGE_SIZE},
+      offset: ${offset}
+    ) {
       id
       name
       spaceIds
@@ -58,6 +59,17 @@ async function fetchNdcBatch(): Promise<NdcEntity[]> {
   }
 }
 
+// FAST: Generate delete ops using grc-20 deleteEntity function
+function generateDeleteOps(entityIds: string[], spaceId: string): any[] {
+  const spaceIdBytes = parseId(spaceId);
+  
+  return entityIds.map(entityId => ({
+    type: 'deleteEntity',  // lowercase, from your test
+    id: parseId(entityId), // raw Uint8Array
+    space: spaceIdBytes     // raw Uint8Array
+  }));
+}
+
 async function deleteEntities(entityIds: string[]): Promise<void> {
   if (entityIds.length === 0) return;
   
@@ -68,36 +80,20 @@ async function deleteEntities(entityIds: string[]): Promise<void> {
     privateKey: (privateKeyRaw.startsWith('0x') ? privateKeyRaw : `0x${privateKeyRaw}`) as Hex
   });
 
-  const deleteOps: any[] = [];
+  // Generate ops FAST (no async!)
+  console.log(`    Generating ${entityIds.length} delete ops...`);
+  const deleteOps = generateDeleteOps(entityIds, SPACE_ID!);
+  
+  // Publish in batches
+  const totalBatches = Math.ceil(deleteOps.length / PUBLISH_BATCH_SIZE);
+  console.log(`    Publishing ${totalBatches} batches...`);
 
-  for (const entityId of entityIds) {
-    try {
-      const result = await Graph.deleteEntity({ 
-        id: entityId,
-        spaceId: SPACE_ID
-      });
-      if (result?.ops?.length) {
-        deleteOps.push(...result.ops);
-      }
-    } catch (e) {
-      console.error(`  ❌ Failed to generate delete for ${entityId}:`, e);
-    }
-  }
-
-  if (deleteOps.length === 0) return;
-
-  const publishBatches = [];
-  for (let i = 0; i < deleteOps.length; i += BATCH_SIZE) {
-    publishBatches.push(deleteOps.slice(i, i + BATCH_SIZE));
-  }
-
-  for (let i = 0; i < publishBatches.length; i++) {
-    const batch = publishBatches[i];
-    console.log(`    Publishing ${i + 1}/${publishBatches.length} (${batch.length} ops)...`);
-
+  for (let i = 0; i < totalBatches; i++) {
+    const batch = deleteOps.slice(i * PUBLISH_BATCH_SIZE, (i + 1) * PUBLISH_BATCH_SIZE);
+    
     try {
       const { to, calldata } = await personalSpace.publishEdit({
-        name: `Delete NDCs batch`,
+        name: `Delete NDCs batch ${i + 1}/${totalBatches}`,
         spaceId: SPACE_ID,
         ops: batch,
         author: SPACE_ID,
@@ -105,68 +101,61 @@ async function deleteEntities(entityIds: string[]): Promise<void> {
       });
 
       const txHash = await smartAccount.sendTransaction({ to, data: calldata });
-      if (i < publishBatches.length - 1) {
-        await new Promise(r => setTimeout(r, 3000));
+      process.stdout.write(`✓`);
+      
+      if (i < totalBatches - 1) {
+        await new Promise(r => setTimeout(r, 1500));
       }
     } catch (e: any) {
-      console.error(`    ❌ Batch failed:`, e.message || e);
+      console.error(`\n    ❌ Batch ${i + 1} failed:`, e.message);
     }
   }
+  console.log(); // Newline after progress dots
 }
 
 async function runDelete() {
   if (!SPACE_ID) throw new Error("GEO_SPACE_ID missing in .env");
-  const privateKeyRaw = process.env.GEO_WALLET_PRIVATE_KEY;
-  if (!privateKeyRaw && !DRY_RUN) throw new Error("GEO_WALLET_PRIVATE_KEY missing");
 
-  console.log(`💊 NDC Entity Purge (Batch Mode)`);
+  console.log(`💊 NDC Entity Purge (FAST Mode)`);
   console.log(`🔍 Space: ${SPACE_ID}`);
-  console.log(`📋 Mode: ${DRY_RUN ? 'DRY RUN' : FORCE_DELETE ? 'DELETE' : 'PREVIEW'}\n`);
-
-  if (DRY_RUN) {
-    const ndcs = await fetchNdcBatch();
-    console.log(`\n📊 Sample batch: ${ndcs.length} NDCs found`);
-    if (ndcs.length > 0) {
-      console.log('\n  Sample NDCs:');
-      ndcs.slice(0, 5).forEach((e, i) => {
-        console.log(`    ${i + 1}. ${e.name || '(unnamed)'} (${e.id.substring(0, 8)}...)`);
-      });
-    }
-    console.log('\n🔍 DRY RUN. Run with --force to delete in batches until empty.');
-    return;
-  }
+  console.log(`⚡ Always fetching page 1 (offset 0) - deleted entities slide up!\n`);
 
   if (!FORCE_DELETE) {
-    console.log('\n⚠️  WARNING: This will delete NDCs in batches of 1000 until none remain.');
-    console.log('   Use --force to execute.\n');
-    console.log('   bun run src/delete_ndc_entities.ts --force');
+    console.log('⚠️  PREVIEW MODE - Add --force to delete');
     process.exit(1);
   }
 
   let totalDeleted = 0;
-  let batchNum = 0;
-  
+  let pageNum = 0;
+
+  // Loop until empty - always fetch page 1 (offset 0)
   while (true) {
-    batchNum++;
-    
-    console.log(`\n📦 Batch ${batchNum}: Fetching...`);
-    const ndcs = await fetchNdcBatch();
-    
+    pageNum++;
+    console.log(`\n📦 Batch ${pageNum}: Fetching first ${FETCH_PAGE_SIZE} NDCs...`);
+
+    // ALWAYS offset 0 - deleted entities are gone, next batch slides into position!
+    const ndcs = await fetchNdcPage(0);
+
     if (ndcs.length === 0) {
-      console.log('\n✅ No more NDCs found. All done!');
+      if (totalDeleted === 0) {
+        console.log('✅ No NDCs found. Space is clean!');
+      } else {
+        console.log('\n✅ No more NDCs found. All done!');
+      }
       break;
     }
-    
-    console.log(`🗑️  Deleting ${ndcs.length} NDCs...`);
+
+    console.log(`🗑️  Found ${ndcs.length} NDCs`);
     await deleteEntities(ndcs.map(e => e.id));
     totalDeleted += ndcs.length;
-    
-    console.log(`📊 Total deleted so far: ${totalDeleted}`);
-    
-    await new Promise(r => setTimeout(r, 2000));
+
+    console.log(`📊 Total deleted: ${totalDeleted.toLocaleString()}`);
+
+    // Small delay before next batch
+    await new Promise(r => setTimeout(r, 1000));
   }
 
-  console.log(`\n🎉 Complete! Deleted ${totalDeleted} NDCs total.`);
+  console.log(`\n🎉 Complete! Deleted ${totalDeleted.toLocaleString()} NDCs total.`);
 }
 
 runDelete().catch(console.error);
