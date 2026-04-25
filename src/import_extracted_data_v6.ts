@@ -1,4 +1,6 @@
-// src/import_extracted_data_v4.ts
+// src/import_extracted_data_v6.ts
+// Changes: Added --set-id-only filter and batching
+
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
@@ -28,12 +30,16 @@ if (limitArgIndex !== -1 && args[limitArgIndex + 1]) {
 
 const FORCE_PUBLISH = args.includes('--force');
 const CONNECTED_ONLY = args.includes('--connected-only');
+const SET_ID_ONLY = args.includes('--set-id-only'); // <-- NEW FLAG
 const DRY_RUN = args.includes('--dry-run');
 
 // --- CONFIGURATION ---
 const DATA_DIR = path.join(__dirname, '..', 'data_to_publish');
 const MASTER_FILE = path.join(DATA_DIR, 'full_geo_extraction_v3.jsonl');
 const API_URL = "https://testnet-api.geobrowser.io/graphql";
+
+// --- BATCH CONFIGURATION ---
+const BATCH_SIZE = 80000; // ~8MB target to stay under 10MB limit
 
 // --- TYPES ---
 interface Entity {
@@ -47,6 +53,7 @@ interface Entity {
   INCHIKEY?: string;
   NDC10?: string;
   NDC11?: string;
+  SPL_SET_ID?: string;
   [key: string]: any;
 }
 
@@ -123,7 +130,7 @@ async function detectSpaceType(spaceId: string): Promise<{ type: 'PERSONAL' | 'D
   };
 }
 
-// --- PRE-FLIGHT CHECK (FIXED: Proper spaceIds filter in GraphQL) ---
+// --- PRE-FLIGHT CHECK ---
 async function fetchExistingEntityIds(spaceId: string): Promise<Set<string>> {
   console.log(`🔍 Pre-flight check: Fetching existing entities...`);
   const existingIds = new Set<string>();
@@ -145,7 +152,6 @@ async function fetchExistingEntityIds(spaceId: string): Promise<Set<string>> {
     while (true) {
       batchNum++;
       
-      // FIXED: spaceIds filter in GraphQL query - no JavaScript filtering needed
       const query = `{
         entities(filter: { 
           spaceIds: { is: ["${spaceId}"] }, 
@@ -171,7 +177,6 @@ async function fetchExistingEntityIds(spaceId: string): Promise<Set<string>> {
         
         const entities = json.data?.entities || [];
         
-        // No JavaScript filtering needed - GraphQL already filtered by space!
         entities.forEach((e: any) => {
           existingIds.add(e.id.replace(/-/g, ''));
         });
@@ -287,8 +292,14 @@ function addRelation(entity: Entity, relationId: string, targetId: string): void
   entity.relations[relationId].add(targetId);
 }
 
-// --- HELPER: Create NDC entity with correct naming ---
-function createNdcEntity(ndcData: any, entityMap: Map<string, Entity>): Entity {
+// --- HELPER: Create NDC entity with set_id filtering ---
+// Returns null if SET_ID_ONLY is enabled and no spl_set_id exists
+function createNdcEntity(ndcData: any, entityMap: Map<string, Entity>, setIdOnly: boolean): Entity | null {
+  // Filter out NDCs without SPL_SET_ID if flag is enabled
+  if (setIdOnly && !ndcData.spl_set_id) {
+    return null;
+  }
+
   const ndcCanonical = ndcData.ndc11_no_hyphens;
   const ndcId = generateNdcUuid(ndcCanonical);
   const ndcDisplayName = formatNdc11(ndcCanonical);
@@ -297,15 +308,100 @@ function createNdcEntity(ndcData: any, entityMap: Map<string, Entity>): Entity {
   
   if (ndcData.ndc10) ndcEntity.NDC10 = ndcData.ndc10;
   if (ndcData.ndc11_no_hyphens) ndcEntity.NDC11 = ndcData.ndc11_no_hyphens;
+  if (ndcData.spl_set_id) ndcEntity.SPL_SET_ID = ndcData.spl_set_id;
   
   return ndcEntity;
 }
 
+// --- BATCH PUBLISH HELPER ---
+async function publishInBatches(
+  allOps: any[],
+  spaceInfo: { type: 'PERSONAL' | 'DAO'; address?: string },
+  spaceId: string,
+  smartAccount: any,
+  personalSpaceId: string | undefined,
+  INGREDIENT_LIMIT: number | undefined,
+  CONNECTED_ONLY: boolean
+): Promise<void> {
+  const totalBatches = Math.ceil(allOps.length / BATCH_SIZE);
+  console.log(`\n📦 Splitting ${allOps.length.toLocaleString()} operations into ${totalBatches} batches (max ${BATCH_SIZE.toLocaleString()} per batch)\n`);
+
+  for (let i = 0; i < totalBatches; i++) {
+    const start = i * BATCH_SIZE;
+    const end = Math.min(start + BATCH_SIZE, allOps.length);
+    const batch = allOps.slice(start, end);
+    const batchNum = i + 1;
+    
+    console.log(`\n🚀 Publishing batch ${batchNum}/${totalBatches} (${batch.length.toLocaleString()} operations)...`);
+    
+    try {
+      let cid: string;
+      let editId: string;
+      let to: `0x${string}`;
+      let calldata: `0x${string}`;
+
+      const batchName = `Import V4 ${INGREDIENT_LIMIT ? `(Limit ${INGREDIENT_LIMIT})` : '(All)'}${CONNECTED_ONLY ? ' [Connected Only)' : ''} - Batch ${batchNum}/${totalBatches}`;
+
+      if (spaceInfo.type === 'DAO') {
+        const result = await daoSpace.proposeEdit({
+          name: batchName,
+          ops: batch,
+          author: personalSpaceId!.replace(/-/g, ''),
+          daoSpaceAddress: spaceInfo.address as `0x${string}`,
+          callerSpaceId: personalSpaceId!.replace(/-/g, ''),
+          daoSpaceId: spaceId.replace(/-/g, ''),
+          network: "TESTNET",
+        });
+        cid = result.cid;
+        editId = result.editId;
+        to = result.to;
+        calldata = result.calldata;
+        console.log(`📝 Proposal created. CID: ${cid}`);
+        console.log(`🆔 Edit ID: ${editId}`);
+        console.log(`🗳️  Proposal ID: ${result.proposalId}`);
+      } else {
+        const result = await personalSpace.publishEdit({
+          name: batchName,
+          spaceId: spaceId.replace(/-/g, ''),
+          ops: batch,
+          author: spaceId.replace(/-/g, ''),
+          network: "TESTNET",
+        });
+        cid = result.cid;
+        editId = result.editId;
+        to = result.to;
+        calldata = result.calldata;
+        console.log(`📝 IPFS CID: ${cid}`);
+        console.log(`🆔 Edit ID: ${editId}`);
+      }
+
+      console.log(`📬 Target: ${to}`);
+
+      const txHash = await smartAccount.sendTransaction({ to, data: calldata });
+      console.log(`✅ Batch ${batchNum}/${totalBatches} complete. TX: ${txHash}`);
+      
+      // Delay between batches to avoid rate limiting
+      if (batchNum < totalBatches) {
+        console.log(`⏳ Waiting 3 seconds before next batch...`);
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+      
+    } catch (e: any) {
+      console.error(`❌ Batch ${batchNum} failed:`, e.message);
+      throw e;
+    }
+  }
+
+  console.log(`\n🎉 All ${totalBatches} batches published successfully!`);
+}
+
 async function runImport() {
   const limitStr = INGREDIENT_LIMIT ? ` (Limit: ${INGREDIENT_LIMIT})` : ' (All Data)';
-  console.log(`🚀 Starting Import V4${limitStr}...`);
+  const setIdStr = SET_ID_ONLY ? ' [SET_ID_ONLY = Only NDCs with SPL_SET_ID]' : '';
+  console.log(`🚀 Starting Import V4${limitStr}${setIdStr}...`);
   if (FORCE_PUBLISH) console.warn('⚠️  --force flag detected: Skipping existence check!');
   if (CONNECTED_ONLY) console.log('🧹 --connected-only flag detected: Filtering isolated ingredients.');
+  if (SET_ID_ONLY) console.log('🧹 --set-id-only flag detected: Filtering NDCs without SPL_SET_ID (~ removes 63k NDCs)');
   if (DRY_RUN) console.log('🔍 --dry-run flag detected: Preview mode (no publish).');
 
   // 1. Validate Environment
@@ -342,10 +438,10 @@ async function runImport() {
     console.log('✅ Smart Account Initialized.');
   }
 
-  // 4. Fetch Existing IDs (using proper spaceIds filter)
+  // 4. Fetch Existing IDs
   const existingIds = (DRY_RUN || FORCE_PUBLISH) ? new Set<string>() : await fetchExistingEntityIds(spaceId!);
 
-  // 5. Load Data (JSONL format)
+  // 5. Load Data
   if (!fs.existsSync(MASTER_FILE)) {
     console.error(`❌ Master file not found: ${MASTER_FILE}`);
     process.exit(1);
@@ -383,6 +479,7 @@ async function runImport() {
   // 7. Build Entity Graph
   const entityMap = new Map<string, Entity>();
   const dedupeStats = { df: 0, scd: 0, sbd: 0, bn: 0, pin: 0, min: 0, ndc: 0, combo_scd: 0, combo_sbd: 0 };
+  let filteredNdcCount = 0; // Track filtered NDCs
 
   ingredientsToImport.forEach((ing: any) => {
     const ingId = generateUuid(ing.rxcui, TYPE_IDS.IN);
@@ -410,7 +507,7 @@ async function runImport() {
     if ((connections.sbd || []).length !== sbdList.length) dedupeStats.sbd += (connections.sbd || []).length - sbdList.length;
     if ((connections.bn || []).length !== bnList.length) dedupeStats.bn += (connections.bn || []).length - bnList.length;
 
-    // Process MIN (with combo products!)
+    // Process MIN with combo products
     minList.forEach((minData: any) => {
       const minId = generateUuid(minData.rxcui, TYPE_IDS.MIN);
       const minEntity = getEntity(minId, TYPE_IDS.MIN, minData.rxcui, minData.name, entityMap);
@@ -439,8 +536,12 @@ async function runImport() {
         if ((comboScd.ndcs || []).length !== ndcList.length) dedupeStats.ndc += (comboScd.ndcs || []).length - ndcList.length;
 
         ndcList.forEach((ndcData: any) => {
-          const ndcEntity = createNdcEntity(ndcData, entityMap);
-          addRelation(comboScdEntity, RELATION_IDS.NDCS, ndcEntity.id);
+          const ndcEntity = createNdcEntity(ndcData, entityMap, SET_ID_ONLY);
+          if (ndcEntity) {
+            addRelation(comboScdEntity, RELATION_IDS.NDCS, ndcEntity.id);
+          } else {
+            filteredNdcCount++;
+          }
         });
       });
 
@@ -458,8 +559,12 @@ async function runImport() {
         if ((comboSbd.ndcs || []).length !== ndcList.length) dedupeStats.ndc += (comboSbd.ndcs || []).length - ndcList.length;
 
         ndcList.forEach((ndcData: any) => {
-          const ndcEntity = createNdcEntity(ndcData, entityMap);
-          addRelation(comboSbdEntity, RELATION_IDS.NDCS, ndcEntity.id);
+          const ndcEntity = createNdcEntity(ndcData, entityMap, SET_ID_ONLY);
+          if (ndcEntity) {
+            addRelation(comboSbdEntity, RELATION_IDS.NDCS, ndcEntity.id);
+          } else {
+            filteredNdcCount++;
+          }
         });
 
         if (comboSbd.brand_name) {
@@ -494,8 +599,12 @@ async function runImport() {
       if ((scdData.ndcs || []).length !== ndcList.length) dedupeStats.ndc += (scdData.ndcs || []).length - ndcList.length;
 
       ndcList.forEach((ndcData: any) => {
-        const ndcEntity = createNdcEntity(ndcData, entityMap);
-        addRelation(scdEntity, RELATION_IDS.NDCS, ndcEntity.id);
+        const ndcEntity = createNdcEntity(ndcData, entityMap, SET_ID_ONLY);
+        if (ndcEntity) {
+          addRelation(scdEntity, RELATION_IDS.NDCS, ndcEntity.id);
+        } else {
+          filteredNdcCount++;
+        }
       });
     });
 
@@ -508,8 +617,12 @@ async function runImport() {
       if ((sbdData.ndcs || []).length !== ndcList.length) dedupeStats.ndc += (sbdData.ndcs || []).length - ndcList.length;
 
       ndcList.forEach((ndcData: any) => {
-        const ndcEntity = createNdcEntity(ndcData, entityMap);
-        addRelation(sbdEntity, RELATION_IDS.NDCS, ndcEntity.id);
+        const ndcEntity = createNdcEntity(ndcData, entityMap, SET_ID_ONLY);
+        if (ndcEntity) {
+          addRelation(sbdEntity, RELATION_IDS.NDCS, ndcEntity.id);
+        } else {
+          filteredNdcCount++;
+        }
       });
 
       if (sbdData.brand_name) {
@@ -534,6 +647,10 @@ async function runImport() {
     Object.entries(dedupeStats).forEach(([key, val]) => {
       if (val > 0) console.log(`   ${key}: ${val} duplicates removed`);
     });
+  }
+
+  if (SET_ID_ONLY && filteredNdcCount > 0) {
+    console.log(`🧹 --set-id-only filtered out ${filteredNdcCount.toLocaleString()} NDCs without SPL_SET_ID`);
   }
 
   const allEntities = Array.from(entityMap.values());
@@ -561,6 +678,7 @@ async function runImport() {
     if (entity.typeId === TYPE_IDS.NDC) {
       if (entity.NDC10) values.push({ property: PROPERTY_IDS.NDC10, type: 'text', value: entity.NDC10 });
       if (entity.NDC11) values.push({ property: PROPERTY_IDS.NDC11, type: 'text', value: entity.NDC11 });
+      if (entity.SPL_SET_ID) values.push({ property: PROPERTY_IDS.SPL_SET_ID, type: 'text', value: entity.SPL_SET_ID });
     }
     
     if (entity.typeId === TYPE_IDS.IN) {
@@ -605,13 +723,14 @@ async function runImport() {
     const manifestPath = path.join(DATA_DIR, `manifest_v4_${timestamp}.json`);
     const manifest = {
       timestamp: new Date().toISOString(),
-      batchName: `Import V4 ${INGREDIENT_LIMIT ? `Limit ${INGREDIENT_LIMIT}` : 'All'}${CONNECTED_ONLY ? ' (Connected Only)' : ''}`,
+      batchName: `Import V4 ${INGREDIENT_LIMIT ? `Limit ${INGREDIENT_LIMIT}` : 'All'}${CONNECTED_ONLY ? ' (Connected Only)' : ''}${SET_ID_ONLY ? ' (SET_ID_ONLY)' : ''}`,
       spaceId: spaceId,
       spaceType: spaceInfo.type,
       entityIds: allEntities.map(e => e.id),
       entityCount: allEntities.length,
       opsCount: allOps.length,
       skippedCount,
+      filteredNdcCount: SET_ID_ONLY ? filteredNdcCount : 0,
       dedupeStats
     };
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
@@ -626,6 +745,9 @@ async function runImport() {
     console.log(`   Ingredients processed: ${ingredientsToImport.length}`);
     console.log(`   Total entities generated: ${allEntities.length}`);
     console.log(`   Operations: ${allOps.length}`);
+    if (SET_ID_ONLY) {
+      console.log(`   NDCs filtered (no SPL_SET_ID): ${filteredNdcCount}`);
+    }
     console.log(`\n📁 Review summary file. Re-run without --dry-run to publish.`);
     return;
   }
@@ -648,6 +770,9 @@ async function runImport() {
   console.log(`   Total entities: ${allEntities.length}`);
   console.log(`   Operations: ${allOps.length}`);
   console.log(`   Skipped (already exist): ${skippedCount}`);
+  if (SET_ID_ONLY) {
+    console.log(`   Filtered NDCs (no SPL_SET_ID): ${filteredNdcCount}`);
+  }
   if (spaceInfo.type === 'DAO') {
     console.log(`   ⚠️  DAO Space: This will create a PROPOSAL that requires voting.`);
   }
@@ -659,53 +784,16 @@ async function runImport() {
     return;
   }
 
-  console.log(`\n🚀 Publishing operations to Geo (${spaceInfo.type} space)...`);
-  try {
-    let cid: string;
-    let editId: string;
-    let to: `0x${string}`;
-    let calldata: `0x${string}`;
-
-    if (spaceInfo.type === 'DAO') {
-      const result = await daoSpace.proposeEdit({
-        name: `Import V4 ${INGREDIENT_LIMIT ? `(Limit ${INGREDIENT_LIMIT})` : '(All)'}${CONNECTED_ONLY ? ' [Connected Only)' : ''}`,
-        ops: allOps,
-        author: personalSpaceId!.replace(/-/g, ''),
-        daoSpaceAddress: spaceInfo.address as `0x${string}`,
-        callerSpaceId: personalSpaceId!.replace(/-/g, ''),
-        daoSpaceId: spaceId.replace(/-/g, ''),
-        network: "TESTNET",
-      });
-      cid = result.cid;
-      editId = result.editId;
-      to = result.to;
-      calldata = result.calldata;
-      console.log(`📝 Proposal created. CID: ${cid}`);
-      console.log(`🆔 Edit ID: ${editId}`);
-      console.log(`🗳️  Proposal ID: ${result.proposalId}`);
-    } else {
-      const result = await personalSpace.publishEdit({
-        name: `Import V4 ${INGREDIENT_LIMIT ? `(Limit ${INGREDIENT_LIMIT})` : '(All)'}${CONNECTED_ONLY ? ' [Connected Only)' : ''}`,
-        spaceId: spaceId.replace(/-/g, ''),
-        ops: allOps,
-        author: spaceId.replace(/-/g, ''),
-        network: "TESTNET",
-      });
-      cid = result.cid;
-      editId = result.editId;
-      to = result.to;
-      calldata = result.calldata;
-      console.log(`📝 IPFS CID: ${cid}`);
-      console.log(`🆔 Edit ID: ${editId}`);
-    }
-
-    console.log(`📬 Target: ${to}`);
-
-    const txHash = await smartAccount!.sendTransaction({ to, data: calldata });
-    console.log(`✅ Import Complete. TX: ${txHash}`);
-  } catch (e) {
-    console.error('❌ Publish failed:', e);
-  }
+  // --- BATCHED PUBLISH ---
+  await publishInBatches(
+    allOps,
+    spaceInfo,
+    spaceId!,
+    smartAccount!,
+    personalSpaceId,
+    INGREDIENT_LIMIT,
+    CONNECTED_ONLY
+  );
 }
 
 runImport().catch(console.error);
