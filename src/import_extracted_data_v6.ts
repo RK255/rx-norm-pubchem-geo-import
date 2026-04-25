@@ -348,8 +348,8 @@ async function publishInBatches(
           ops: batch,
           author: personalSpaceId!.replace(/-/g, ''),
           daoSpaceAddress: spaceInfo.address as `0x${string}`,
-          callerSpaceId: personalSpaceId!.replace(/-/g, ''),
-          daoSpaceId: spaceId.replace(/-/g, ''),
+          callerSpaceId: "0x" + personalSpaceId!.replace(/-/g, ''),
+          daoSpaceId: "0x" + spaceId.replace(/-/g, ''),
           network: "TESTNET",
         });
         cid = result.cid;

@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "import": "tsx src/import_extracted_data_v4.ts",
+    "import": "tsx src/import_extracted_data_v6.ts",
     "import:dist": "node dist/import_extracted_data.js",
-    "rollback": "tsx src/rollback_selective.ts",
+    "rollback": "tsx src/rollback_selective_bulk.ts",
     "rollback:dist": "node dist/rollback_selective.js",
-    "clean_all": "tsx src/clean_pharma_types.ts",
+    "clean_all": "tsx src/clean_pharma_master.ts",
     "clean_all:dist": "node dist/clean_pharma_types.js"
   },
   "dependencies": {
