@@ -34,19 +34,22 @@ Geo Health Space - RxNorm RxCUI Ingestion Ontology
 | Multiple Ingredients    | `e8885ee2b8674952b2538ad4eee058e2` |
 | Precise Ingredients     | `5d5602ac0fe64f4dbdc345c0bdf09d72` |
 | NDCs                    | `199c04685b3c49d3b09cdb32a40459cc` |
+| Ingredients             | `42f9691bb3334c058553ab74c5fa4016` |
 
 ## Properties
 
-| Property  |                UUID                |
-|-----------|------------------------------------|
-| Name      | `a126ca530c8e48d5b88882c734c38935` |
-| RxCUI     | `e6c50e227460442cab646a48f235459a` |
-| SMILES    | `07bc332f2afd4e498d868f4e85ec5cc1` |
-| InChI Key | `93d0ecbc41df4c668d2fb16172002dcb` |
-| PMID      | `1577e86142964c9484c92cf079e330e1` |
-| NDC10     | `a7f0c739e65946d493993de764fe497e` |
-| NDC11     | `1d9b05ec0ad24423a71257f9ad2e5a26` |
-| SPL_SET_ID| `97ad7e68cb4547b281655b9666958b45` |
+|        Property      |                UUID                |
+|----------------------|------------------------------------|
+| Name                 | `a126ca530c8e48d5b88882c734c38935` |
+| RxCUI                | `e6c50e227460442cab646a48f235459a` |
+| SMILES               | `07bc332f2afd4e498d868f4e85ec5cc1` |
+| InChI Key            | `93d0ecbc41df4c668d2fb16172002dcb` |
+| PMID                 | `1577e86142964c9484c92cf079e330e1` |
+| NDC10                | `a7f0c739e65946d493993de764fe497e` |
+| NDC11                | `1d9b05ec0ad24423a71257f9ad2e5a26` |
+| SPL_SET_ID           | `97ad7e68cb4547b281655b9666958b45` |
+| NADAC Unit Price     | `866fe5eeda584f1aba92522cfeccfac0` |
+| Cost Plus Unit Price | `a8c3eeb8f1ba45fca53094ccbe77351d` |
 <!-- | PubChem CID | `<NEED_UUID>` | -->
 
 ## Entity Hierarchy
@@ -61,7 +64,7 @@ Geo Health Space - RxNorm RxCUI Ingestion Ontology
 
 ### Brand Name (BN)
 - Properties: Name, RxCUI
-- Relations: Semantic Branded Drugs
+- Relations: Semantic Branded Drugs, Ingredients
 
 ### Dose Form (DF)
 - Properties: Name, RxCUI
@@ -78,5 +81,5 @@ Geo Health Space - RxNorm RxCUI Ingestion Ontology
 - Properties: Name, RxCUI
 
 ### NDC
-- Properties: Name, NDC10, NDC11, SPL Set ID
+- Properties: Name, NDC10, NDC11, SPL Set ID, NADAC Unit Price, Cost Plus Unit Price
 - Relations: Link to from SCD, SBD

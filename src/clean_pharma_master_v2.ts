@@ -1,4 +1,5 @@
-// src/clean_pharma_mega.ts
+// src/clean_pharma_master.ts
+// V2: Added --skip-scd flag to bypass problematic SCD deletion
 import 'dotenv/config';
 import { Graph, personalSpace, getSmartAccountWalletClient } from '@geoprotocol/geo-sdk';
 import type { Hex } from 'viem';
@@ -8,14 +9,16 @@ const API_URL = "https://testnet-api.geobrowser.io/graphql";
 const SPACE_ID = process.env.GEO_SPACE_ID;
 const FORCE_DELETE = process.argv.includes('--force');
 const DRY_RUN = process.argv.includes('--dry-run');
+const SKIP_SCD = process.argv.includes('--skip-scd');  // NEW: Skip SCD flag
 
 const TARGET_PER_TYPE = 20000; // Accumulate this many per type, then delete
 
+// NEW: Filter out SCD if --skip-scd flag is present
 const PHARMA_TYPES = [
   { id: TYPE_IDS.IN, name: 'Ingredient' },
   { id: TYPE_IDS.BN, name: 'Brand' },
   { id: TYPE_IDS.DF, name: 'Dose Form' },
-  { id: TYPE_IDS.SCD, name: 'SCD' },
+  ...(SKIP_SCD ? [] : [{ id: TYPE_IDS.SCD, name: 'SCD' }]),  // Conditionally include SCD
   { id: TYPE_IDS.SBD, name: 'SBD' },
   { id: TYPE_IDS.MIN, name: 'MIN' },
   { id: TYPE_IDS.PIN, name: 'PIN' },
@@ -185,6 +188,8 @@ async function runDelete() {
   console.log(`💊 Pharma Entity Mega-Purge`);
   console.log(`🔍 Space: ${SPACE_ID}`);
   console.log(`📋 Mode: ${DRY_RUN ? 'DRY RUN' : 'DELETE'}`);
+  // NEW: Indicate if SCDs are being skipped
+  if (SKIP_SCD) console.log(`⏭️ SCD: SKIPPED (use --skip-scd to bypass stuck SCDs)`);
   console.log(`🎯 Accumulate ${TARGET_PER_TYPE} per type\n`);
 
   let grandTotal = 0;

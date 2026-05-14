@@ -31,9 +31,10 @@ if (!path.isAbsolute(manifestPath)) {
 function extractEntityIdsFromManifest(manifest: any): string[] {
   const ids = new Set<string>();
   
-  // Check if manifest has ops directly (V6 format) or entityIds
-  if (manifest.entityIds && Array.isArray(manifest.entityIds)) {
-    manifest.entityIds.forEach((id: string) => ids.add(id));
+  // FIXED: Support both v9.3 (newEntityIds) and legacy (entityIds)
+  const idArray = manifest.newEntityIds || manifest.entityIds;
+  if (idArray && Array.isArray(idArray)) {
+    idArray.forEach((id: string) => ids.add(id));
   }
   
   // Also extract from operations if present
@@ -62,9 +63,9 @@ async function runRollback() {
   }
   
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-  const { spaceId: manifestSpaceId, batchName = 'Unknown' } = manifest;
+  const { spaceId: manifestSpaceId, proposalName = 'Unknown' } = manifest;
 
-  console.log(`🔄 Mega-Rollback: ${batchName}`);
+  console.log(`🔄 Mega-Rollback: ${proposalName}`);
   console.log(`🔧 Mode: ${HARD_DELETE ? 'HARD DELETE' : 'Strip Properties'}`);
   console.log(`📄 Manifest: ${path.basename(manifestPath)}\n`);
 
