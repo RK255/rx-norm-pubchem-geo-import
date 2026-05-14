@@ -55,12 +55,12 @@ Geo Health Space - RxNorm RxCUI Ingestion Ontology
 ## Entity Hierarchy
 
 ### Ingredient (IN)
-- Properties: Name, RxCUI, SMILES, InChI Key, PMID
+- Properties: Name, RxCUI, SMILES, InChI Key, PMID, Description
 - Relations: Brand Names, Dose Forms, Semantic Clinical Drugs, Semantic Branded Drugs, Precise Ingredients, Multiple Ingredients
 
 ### Multiple Ingredient (MIN)
 - Properties: Name, RxCUI
-- Relations: Multiple Ingredients, Semantic Clinical Drugs, Semantic Branded Drugs, Brand Names
+- Relations: Multiple Ingredients, Semantic Clinical Drugs, Semantic Branded Drugs, Brand Names, Dose Forms
 
 ### Brand Name (BN)
 - Properties: Name, RxCUI
@@ -79,6 +79,7 @@ Geo Health Space - RxNorm RxCUI Ingestion Ontology
 
 ### Precise Ingredient (PIN)
 - Properties: Name, RxCUI
+- Relations: Multiple Ingredients, Semantic Clinical Drugs, Semantic Branded Drugs, Brand Names
 
 ### NDC
 - Properties: Name, NDC10, NDC11, SPL Set ID, NADAC Unit Price, Cost Plus Unit Price
