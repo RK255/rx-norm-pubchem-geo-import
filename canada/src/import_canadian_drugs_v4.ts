@@ -1,13 +1,15 @@
-// src/import_canadian_drugs_v1.ts
-// V1: CanadianGenericDrug (CGD), CanadianBrandedDrug (CBD), DIN entities
+// src/import_canadian_drugs_v4.ts
+// V4: CanadianGenericDrug (CGD), CanadianBrandedDrug (CBD), DIN entities
 //     + bidirectional relations to existing RxNorm IN/MIN/PIN anchor layer
+//     + BC PharmaCare unit price on DIN entities
+//     + FIX: forward anchor relations (IN/MIN/PIN → CGD/CBD) now emitted
+//            via CANADIAN_GENERIC_DRUGS / CANADIAN_BRANDED_DRUGS relation IDs
 //
 // Usage:
-//   tsx src/import_canadian_drugs_v1.ts
-//   tsx src/import_canadian_drugs_v1.ts --dry-run
-//   tsx src/import_canadian_drugs_v1.ts --force              # skip existing-entity prefetch
-//   tsx src/import_canadian_drugs_v1.ts --skip-patches       # skip patching IN/MIN/PIN parents
-//   tsx src/import_canadian_drugs_v1.ts --proposal-name "My name"
+//   bun run canada/src/import_canadian_drugs_v4.ts
+//   bun run canada/src/import_canadian_drugs_v4.ts --dry-run
+//   bun run canada/src/import_canadian_drugs_v4.ts --force
+//   bun run canada/src/import_canadian_drugs_v4.ts --proposal-name "My name"
 //
 // .env keys: GEO_SPACE_ID, GEO_PERSONAL_SPACE_ID (DAO only), GEO_WALLET_PRIVATE_KEY
 
@@ -34,7 +36,7 @@ const __dirname  = path.dirname(__filename);
 // CONFIGURATION
 // =============================================================================
 
-const DATA_DIR         = path.join(__dirname, '..', 'data_to_publish',);
+const DATA_DIR         = path.join(__dirname, '..', 'data_to_publish');
 const DAO_MANIFEST_DIR = path.join(DATA_DIR, 'DAO_manifests');
 const JSONL_FILE       = path.join(DATA_DIR, 'canada_products_v1.jsonl');
 const API_URL          = 'https://testnet-api.geobrowser.io/graphql';
@@ -46,10 +48,9 @@ const BATCH_SIZE_DAO      = 2_000;
 // ARGUMENT PARSING
 // =============================================================================
 
-const args         = process.argv.slice(2);
-const DRY_RUN      = args.includes('--dry-run');
-const FORCE        = args.includes('--force');
-const SKIP_PATCHES = args.includes('--skip-patches');
+const args        = process.argv.slice(2);
+const DRY_RUN     = args.includes('--dry-run');
+const FORCE       = args.includes('--force');
 
 const PROPOSAL_NAME = (() => {
   const i = args.indexOf('--proposal-name');
@@ -63,6 +64,7 @@ const PROPOSAL_NAME = (() => {
 interface DinEntry {
   din:      string;   // e.g. "02295318"
   can_name: string;   // e.g. "atorvastatin 80 mg Tablet"
+  bc_pharmacare_unit_price?: number;
 }
 
 interface ProductRecord {
@@ -85,11 +87,6 @@ interface CanadianEntity {
   relations: Record<string, Array<{ toEntity: string }>>;
 }
 
-type PatchMap = Map<string, {
-  parentUuid: string;
-  relations:  Record<string, Array<{ toEntity: string }>>;
-}>;
-
 const TYPE_NAMES: Record<string, string> = {
   [CAN_TYPE_IDS.CGD]: 'CanadianGenericDrug',
   [CAN_TYPE_IDS.CBD]: 'CanadianBrandedDrug',
@@ -98,7 +95,7 @@ const TYPE_NAMES: Record<string, string> = {
 
 // =============================================================================
 // UUID HELPERS
-// rxnormUuid seed must match v10's generateUuid: `${typeId}:${rxcui}`
+// rxnormUuid seed must match v11's generateUuid: `${typeId}:${rxcui}`
 // =============================================================================
 
 function sha256Uuid(seed: string): string {
@@ -106,36 +103,33 @@ function sha256Uuid(seed: string): string {
   return [h.slice(0,8), h.slice(8,12), h.slice(12,16), h.slice(16,20), h.slice(20,32)].join('-');
 }
 
-/** Points at an existing RxNorm IN/MIN/PIN published by v10 */
+/** Points at an existing RxNorm IN/MIN/PIN published by v11 */
 function rxnormUuid(rxcui: string, tty: 'IN' | 'MIN' | 'PIN'): string {
   return sha256Uuid(`${RXNORM_TYPE_IDS[tty]}:${rxcui}`);
 }
 
-function cgdUuid(rxcui: string): string {
-  return sha256Uuid(`CAN:CGD:${rxcui}`);
-}
-
-function cbdUuid(rxcui: string): string {
-  return sha256Uuid(`CAN:CBD:${rxcui}`);
-}
-
-function dinEntityUuid(dinNumber: string): string {
-  return sha256Uuid(`CAN:DIN:${dinNumber}`);
-}
+function cgdUuid(rxcui: string): string        { return sha256Uuid(`CAN:CGD:${rxcui}`); }
+function cbdUuid(rxcui: string): string        { return sha256Uuid(`CAN:CBD:${rxcui}`); }
+function dinEntityUuid(din: string): string    { return sha256Uuid(`CAN:DIN:${din}`); }
 
 function resolveProduct(
   rxcui: string,
   rxTty: 'SCD' | 'SBD'
-): { uuid: string; typeId: string; canType: 'CGD' | 'CBD' } {
-  if (rxTty === 'SCD') return { uuid: cgdUuid(rxcui), typeId: CAN_TYPE_IDS.CGD, canType: 'CGD' };
-  else                 return { uuid: cbdUuid(rxcui), typeId: CAN_TYPE_IDS.CBD, canType: 'CBD' };
+): { uuid: string; typeId: string } {
+  if (rxTty === 'SCD') return { uuid: cgdUuid(rxcui), typeId: CAN_TYPE_IDS.CGD };
+  else                 return { uuid: cbdUuid(rxcui), typeId: CAN_TYPE_IDS.CBD };
 }
 
 // =============================================================================
 // RELATION HELPERS
 // =============================================================================
 
-/** Back-relation: CGD/CBD → parent IN/MIN/PIN (reuses existing RxNorm types) */
+/**
+ * Back-relation type used ON the CGD/CBD entity pointing UP to its parent.
+ * CGD → INGREDIENTS       → IN
+ * CGD → MULTIPLE_INGR.    → MIN
+ * CGD → PRECISE_INGR.     → PIN
+ */
 function backRelId(parentTty: 'IN' | 'MIN' | 'PIN'): string {
   switch (parentTty) {
     case 'IN':  return RXNORM_RELATION_IDS.INGREDIENTS;
@@ -144,15 +138,8 @@ function backRelId(parentTty: 'IN' | 'MIN' | 'PIN'): string {
   }
 }
 
-/** Forward relation: IN/MIN/PIN → CGD/CBD (new Canadian relation types) */
-function fwdRelId(canType: 'CGD' | 'CBD'): string {
-  return canType === 'CGD'
-    ? CAN_RELATION_IDS.CANADIAN_GENERIC_DRUGS
-    : CAN_RELATION_IDS.CANADIAN_BRANDED_DRUGS;
-}
-
 // =============================================================================
-// SPACE HELPERS  (identical to v10)
+// SPACE HELPERS
 // =============================================================================
 
 async function detectSpaceType(
@@ -181,8 +168,6 @@ async function detectSpaceType(
 
 // =============================================================================
 // FETCH EXISTING ENTITIES
-// Only checks Canadian-owned types (CGD/CBD/DIN) — IN/MIN/PIN patching
-// is handled separately and does not skip based on existence.
 // =============================================================================
 
 async function fetchExistingEntityIds(spaceId: string): Promise<Set<string>> {
@@ -254,7 +239,6 @@ async function fetchExistingEntityIds(spaceId: string): Promise<Set<string>> {
 function generateReport(
   existingCount: number,
   newEntities:   CanadianEntity[],
-  patchCount:    number,
   spaceType:     string,
 ): string {
   const lines: string[] = [];
@@ -270,7 +254,6 @@ function generateReport(
   lines.push('='.repeat(60));
   lines.push(`  Existing Canadian:  ${existingCount.toLocaleString().padStart(10)}`);
   lines.push(`  Will create:        ${newEntities.length.toLocaleString().padStart(10)} new entities`);
-  lines.push(`  Will patch:         ${patchCount.toLocaleString().padStart(10)} IN/MIN/PIN parents`);
 
   if (Object.keys(byType).length > 0) {
     lines.push('\n' + '-'.repeat(60));
@@ -305,7 +288,7 @@ function generateReport(
 }
 
 // =============================================================================
-// PUBLISHING  (identical to v10)
+// PUBLISHING
 // =============================================================================
 
 async function publishInBatches(
@@ -315,7 +298,6 @@ async function publishInBatches(
   smartAccount:    any,
   personalSpaceId: string | undefined,
   proposalName:    string | undefined,
-  batchTag:        string,
 ): Promise<void> {
   const batchSize    = spaceInfo.type === 'DAO' ? BATCH_SIZE_DAO : BATCH_SIZE_PERSONAL;
   const totalBatches = Math.ceil(allOps.length / batchSize);
@@ -328,7 +310,7 @@ async function publishInBatches(
     const batchNum = i + 1;
     const name     = proposalName
       ? `${proposalName} (Batch ${batchNum}/${totalBatches})`
-      : `Canadian Drugs v1 ${batchTag} Batch ${batchNum}/${totalBatches}`;
+      : `Canadian Drugs v4 Batch ${batchNum}/${totalBatches}`;
 
     console.log(`Batch ${batchNum}/${totalBatches}  (${batch.length.toLocaleString()} ops)...`);
     console.log(`   Name: "${name.substring(0, 60)}${name.length > 60 ? '...' : ''}"`);
@@ -385,9 +367,8 @@ async function publishInBatches(
 // =============================================================================
 
 async function runImport(): Promise<void> {
-  console.log('\n🍁 Canadian Drug Importer  v1');
-  if (DRY_RUN)      console.log('   🔍 DRY RUN — no transactions will be sent');
-  if (SKIP_PATCHES) console.log('   ⏭️  Skipping IN/MIN/PIN parent patches');
+  console.log('\n🍁 Canadian Drug Importer  v4');
+  if (DRY_RUN) console.log('   🔍 DRY RUN — no transactions will be sent');
   console.log('');
 
   // ── Env ───────────────────────────────────────────────────────────────────
@@ -400,7 +381,7 @@ async function runImport(): Promise<void> {
     process.exit(1);
   }
 
-  // ── Detect space type via API ─────────────────────────────────────────────
+  // ── Detect space type ─────────────────────────────────────────────────────
   const spaceInfo = await detectSpaceType(spaceId);
 
   if (spaceInfo.type === 'DAO' && !personalSpaceId) {
@@ -416,7 +397,7 @@ async function runImport(): Promise<void> {
   if (PROPOSAL_NAME) console.log(`📝 Name:     "${PROPOSAL_NAME}"`);
   console.log('');
 
-  // ── Wallet (skipped for dry run) ──────────────────────────────────────────
+  // ── Wallet ────────────────────────────────────────────────────────────────
   let smartAccount: any = null;
   if (!DRY_RUN) {
     if (!privateKeyRaw) {
@@ -430,7 +411,7 @@ async function runImport(): Promise<void> {
     console.log('✅ Wallet ready\n');
   }
 
-  // ── Fetch existing Canadian entities ─────────────────────────────────────
+  // ── Fetch existing Canadian entities ──────────────────────────────────────
   const existingIds = FORCE ? new Set<string>() : await fetchExistingEntityIds(spaceId);
 
   // ── Load + filter JSONL ───────────────────────────────────────────────────
@@ -456,86 +437,102 @@ async function runImport(): Promise<void> {
   console.log(`   CBD (SBD → CanadianBrandedDrug) : ${cbdRecords.length.toLocaleString()}`);
   console.log(`   DINs (embedded)                 : ${totalDins.toLocaleString()}\n`);
 
-  // ── Build entity + patch lists ────────────────────────────────────────────
+  // ── Build entity list ─────────────────────────────────────────────────────
   console.log('🏗️  Building entity graph...');
 
   const newEntities: CanadianEntity[] = [];
-  const patchMap:    PatchMap         = new Map();
-  const seenIds      = new Set<string>(existingIds);
+  const seenIds = new Set<string>(existingIds);
+
+  // Collects parent IN/MIN/PIN → [CGD UUIDs] and [CBD UUIDs]
+  // so we can emit forward anchor relations after the main loop.
+  const parentChildMap = new Map<string, {
+    name:   string;
+    tty:    'IN' | 'MIN' | 'PIN';
+    typeId: string;
+    cgds:   string[];
+    cbds:   string[];
+  }>();
 
   for (const rec of records) {
     const { rx_rxcui, rx_name, rx_tty, parent_rxcui, parent_tty, dins } = rec;
 
-    const { uuid, typeId, canType } = resolveProduct(rx_rxcui, rx_tty);
-    const parentUuid = rxnormUuid(parent_rxcui, parent_tty);
-    const uuidNorm   = uuid.replace(/-/g, '');
+    const { uuid, typeId } = resolveProduct(rx_rxcui, rx_tty);
+    const parentUuid       = rxnormUuid(parent_rxcui, parent_tty);
+    const uuidNorm         = uuid.replace(/-/g, '');
 
-    // ── 1. CGD/CBD entity (skip if already in space) ──────────────────────
-    if (!seenIds.has(uuidNorm)) {
-      seenIds.add(uuidNorm);
+    if (seenIds.has(uuidNorm)) continue;
+    seenIds.add(uuidNorm);
 
-      const dinTargets: Array<{ toEntity: string }> = [];
-
-      for (const din of (dins ?? [])) {
-        const dUuid     = dinEntityUuid(din.din);
-        const dUuidNorm = dUuid.replace(/-/g, '');
-
-        if (!seenIds.has(dUuidNorm)) {
-          seenIds.add(dUuidNorm);
-          newEntities.push({
-            id:     dUuid,
-            typeId: CAN_TYPE_IDS.DIN,
-            name:   din.din,   // e.g. "02295318"
-            values: [],
-            relations: {},
-          }); 
-       }
-        dinTargets.push({ toEntity: dUuid });
-      }
-
-      const relations: Record<string, Array<{ toEntity: string }>> = {
-        [backRelId(parent_tty)]: [{ toEntity: parentUuid }],
-      };
-      if (dinTargets.length > 0) {
-        relations[CAN_RELATION_IDS.DINS] = dinTargets;
-      }
-
-      newEntities.push({
-        id:     uuid,
-        typeId: typeId,
-        name:   rx_name,
-        values: [
-          { property: CAN_PROPERTY_IDS.RELATED_RXCUI, type: 'text', value: rx_rxcui },
-        ],
-        relations,
+    // ── Register this product under its parent for forward anchor upsert ──
+    if (!parentChildMap.has(parentUuid)) {
+      parentChildMap.set(parentUuid, {
+        name:   rec.parent_name,
+        tty:    parent_tty,
+        typeId: RXNORM_TYPE_IDS[parent_tty],
+        cgds:   [],
+        cbds:   [],
       });
     }
+    const pEntry = parentChildMap.get(parentUuid)!;
+    if (rx_tty === 'SCD') pEntry.cgds.push(uuid);
+    else                   pEntry.cbds.push(uuid);
 
-    // ── 2. Accumulate forward patch: IN/MIN/PIN → CGD/CBD ─────────────────
-    if (!SKIP_PATCHES) {
-      const forwardRelTypeId = fwdRelId(canType);
+    // ── DIN entities ──────────────────────────────────────────────────────
+    const dinTargets: Array<{ toEntity: string }> = [];
 
-      if (!patchMap.has(parentUuid)) {
-        patchMap.set(parentUuid, { parentUuid, relations: {} });
+    for (const din of (dins ?? [])) {
+      const dUuid     = dinEntityUuid(din.din);
+      const dUuidNorm = dUuid.replace(/-/g, '');
+
+      if (!seenIds.has(dUuidNorm)) {
+        seenIds.add(dUuidNorm);
+        const dinValues: Array<{ property: string; type: string; value: string | number }> = [];
+        if (din.bc_pharmacare_unit_price !== undefined) {
+          dinValues.push({
+            property: CAN_PROPERTY_IDS.BC_PHARMACARE_UNIT_PRICE,
+            type:     'text',
+            value:    String(din.bc_pharmacare_unit_price),
+          });
+        }
+        newEntities.push({
+          id:        dUuid,
+          typeId:    CAN_TYPE_IDS.DIN,
+          name:      din.din,
+          values:    dinValues,
+          relations: {},
+        });
       }
-      const patch = patchMap.get(parentUuid)!;
-      if (!patch.relations[forwardRelTypeId]) patch.relations[forwardRelTypeId] = [];
 
-      const already = patch.relations[forwardRelTypeId].some(r => r.toEntity === uuid);
-      if (!already) patch.relations[forwardRelTypeId].push({ toEntity: uuid });
+      dinTargets.push({ toEntity: dUuid });
     }
+
+    // ── CGD / CBD entity ──────────────────────────────────────────────────
+    const relations: Record<string, Array<{ toEntity: string }>> = {
+      [backRelId(parent_tty)]: [{ toEntity: parentUuid }],
+    };
+    if (dinTargets.length > 0) {
+      relations[CAN_RELATION_IDS.DINS] = dinTargets;
+    }
+
+    newEntities.push({
+      id:     uuid,
+      typeId: typeId,
+      name:   rx_name,
+      values: [
+        { property: CAN_PROPERTY_IDS.RELATED_RXCUI, type: 'text', value: rx_rxcui },
+      ],
+      relations,
+    });
   }
 
-  const patchEntries = Array.from(patchMap.values());
-
-  // ── Report ─────────────────────────────────────────────────────────────────
-  const report = generateReport(existingIds.size, newEntities, patchEntries.length, spaceInfo.type);
+  // ── Report ────────────────────────────────────────────────────────────────
+  const report = generateReport(existingIds.size, newEntities, spaceInfo.type);
   console.log(report);
 
-  // ── Build ops ──────────────────────────────────────────────────────────────
-  const newOps:   any[] = [];
-  const patchOps: any[] = [];
+  // ── Build ops ─────────────────────────────────────────────────────────────
+  const allOps: any[] = [];
 
+  // Main entity pass: DIN, CGD, CBD entities
   for (const entity of newEntities) {
     try {
       const { ops } = Graph.createEntity({
@@ -545,37 +542,55 @@ async function runImport(): Promise<void> {
         values:    entity.values,
         relations: entity.relations,
       });
-      newOps.push(...ops);
+      allOps.push(...ops);
     } catch (e: any) {
       console.error(`❌ Error building ops for "${entity.name}": ${e.message}`);
     }
   }
 
-  for (const patch of patchEntries) {
+  // ── Parent anchor upserts: IN/MIN/PIN → CGD/CBD (forward direction) ───────
+  // Only emits relation ops — no name/types so existing anchor entities are
+  // not touched and the duplicate-type bug does not reappear.
+  let parentOpCount  = 0;
+  let parentErrCount = 0;
+  for (const [pUuid, { name, typeId, cgds, cbds }] of parentChildMap) {
+    const parentRelations: Record<string, Array<{ toEntity: string }>> = {};
+    if (cgds.length > 0) {
+      parentRelations[CAN_RELATION_IDS.CANADIAN_GENERIC_DRUGS] =
+        cgds.map(id => ({ toEntity: id }));
+    }
+    if (cbds.length > 0) {
+      parentRelations[CAN_RELATION_IDS.CANADIAN_BRANDED_DRUGS] =
+        cbds.map(id => ({ toEntity: id }));
+    }
+    if (Object.keys(parentRelations).length === 0) continue;
+
     try {
-      // Emits only relation-creation ops against the existing parent entity.
-      // No name/types supplied — Graph produces only the requested relations.
       const { ops } = Graph.createEntity({
-        id:        patch.parentUuid,
-        relations: patch.relations,
+        id:        pUuid,
+        relations: parentRelations,
       });
-      patchOps.push(...ops);
+      allOps.push(...ops);
+      parentOpCount += ops.length;
     } catch (e: any) {
-      console.error(`❌ Error building patch ops for ${patch.parentUuid}: ${e.message}`);
+      console.error(`❌ Error upserting parent "${name}": ${e.message}`);
+      parentErrCount++;
     }
   }
 
-  const allOps     = [...newOps, ...patchOps];
+  console.log(`\n🔗 Parent anchor relations:`);
+  console.log(`   Unique IN/MIN/PIN parents : ${parentChildMap.size.toLocaleString()}`);
+  console.log(`   Ops emitted               : ${parentOpCount.toLocaleString()}`);
+  if (parentErrCount > 0) console.log(`   ⚠️  Errors                : ${parentErrCount}`);
+
   const batchSize  = spaceInfo.type === 'DAO' ? BATCH_SIZE_DAO : BATCH_SIZE_PERSONAL;
   const numBatches = Math.ceil(allOps.length / batchSize);
 
-  console.log(`📊 Generated ${allOps.length.toLocaleString()} operations`);
-  console.log(`   New entity ops  : ${newOps.length.toLocaleString()}`);
-  console.log(`   Parent patch ops: ${patchOps.length.toLocaleString()}`);
-  console.log(`   Batch size      : ${batchSize.toLocaleString()}`);
-  console.log(`   Batches         : ${numBatches}\n`);
+  console.log(`\n📊 Generated ${allOps.length.toLocaleString()} operations total`);
+  console.log(`   Batch size : ${batchSize.toLocaleString()}`);
+  console.log(`   Batches    : ${numBatches}\n`);
 
-  // ── Manifest ───────────────────────────────────────────────────────────────
+  // ── Manifest ──────────────────────────────────────────────────────────────
   const timestamp   = Date.now();
   const manifestDir = spaceInfo.type === 'DAO' ? DAO_MANIFEST_DIR : DATA_DIR;
 
@@ -586,30 +601,27 @@ async function runImport(): Promise<void> {
 
   const manifestData = {
     timestamp:    new Date().toISOString(),
-    version:      'canada_v1',
+    version:      'canada_v4',
     spaceId,
     spaceType:    spaceInfo.type,
     proposalName: PROPOSAL_NAME ?? null,
     dryRun:       DRY_RUN,
-    flags:        { force: FORCE, skipPatches: SKIP_PATCHES },
+    flags:        { force: FORCE },
     stats: {
-      existingCanadian: existingIds.size,
-      newEntities:      newEntities.length,
-      newByType:        newEntities.reduce((acc: any, e) => {
+      existingCanadian:  existingIds.size,
+      newEntities:       newEntities.length,
+      newByType:         newEntities.reduce((acc: any, e) => {
         const label = TYPE_NAMES[e.typeId] ?? 'Unknown';
         acc[label]  = (acc[label] ?? 0) + 1;
         return acc;
       }, {}),
-      patchedParents: patchEntries.length,
-      newOps:         newOps.length,
-      patchOps:       patchOps.length,
-      totalOps:       allOps.length,
+      parentAnchorsUpdated: parentChildMap.size,
+      parentAnchorOps:      parentOpCount,
+      totalOps:  allOps.length,
       batchSize,
-      batches:        numBatches,
+      batches:   numBatches,
     },
-    // Full entity ID lists for rollback support
-    newEntityIds:     newEntities.map(e => e.id.replace(/-/g, '')),
-    patchedEntityIds: patchEntries.map(p => p.parentUuid.replace(/-/g, '')),
+    newEntityIds: newEntities.map(e => e.id.replace(/-/g, '')),
     sampleNewEntities: newEntities
       .filter(e => e.typeId !== CAN_TYPE_IDS.DIN)
       .slice(0, 20)
@@ -618,7 +630,7 @@ async function runImport(): Promise<void> {
 
   const manifestPath = path.join(
     manifestDir,
-    `${DRY_RUN ? 'dry_run' : 'publish'}_manifest_canada_v1_${timestamp}.json`
+    `${DRY_RUN ? 'dry_run' : 'publish'}_manifest_canada_v4_${timestamp}.json`
   );
   fs.writeFileSync(manifestPath, JSON.stringify(manifestData, null, 2));
   console.log(`💾 Manifest: ${path.relative(DATA_DIR, manifestPath)}\n`);
@@ -660,7 +672,6 @@ async function runImport(): Promise<void> {
     smartAccount,
     personalSpaceId,
     PROPOSAL_NAME,
-    'entities+patches',
   );
 }
 
