@@ -33,6 +33,7 @@ const RELEASE_MODIFIERS = [
   '40/60 Release 24 HR', '50/50 Release 24 HR', '30/70 Release 24 HR',
   '40/60 Release', '50/50 Release', '30/70 Release',
   '40/60', '50/50', '30/70',
+  '3-Bead', 
 ];
 
 const DURATION_MODIFIERS = [
@@ -49,6 +50,38 @@ const INGREDIENT_PREFIXES = [
   'Immediate-Release',
   'Sustained-Release',
 ];
+const INJECTABLE_DOSE_FORMS = [
+  'Auto-Injector',
+  'Prefilled Syringe',
+];
+
+function formatCalculatedDose(value: number): string {
+  const rounded = Math.round(value * 1000000) / 1000000;
+  return rounded.toString();
+}
+
+function applyInjectableDoseCalculation(name: string): string {
+  if (/\d+(?:\.\d+)?\s*MG\s*\(/i.test(name)) return name;
+  const formsPattern = INJECTABLE_DOSE_FORMS
+    .map(f => f.replace(/[-\s]/g, '[-\\s]'))
+    .join('|');
+  const regex = new RegExp(
+    `^(.*?\\s)(\\d+(?:\\.\\d+)?)\\s*MG\\/ML\\s+(${formsPattern})\\s+(\\d+(?:\\.\\d+)?)\\s*ML\\b(.*)$`,
+    'i'
+  );
+  const match = name.match(regex);
+  if (!match) return name;
+  const before = match[1];
+  if (/MG\/ML/i.test(before) || / \/ /.test(before)) return name;
+  const concStr = match[2];
+  const conc = parseFloat(concStr);
+  const form = match[3];
+  const volStr = match[4];
+  const vol = parseFloat(volStr);
+  const after = match[5];
+  const total = formatCalculatedDose(conc * vol);
+  return `${before}${total} MG (${concStr} MG/ML) ${form} ${volStr} ML${after}`;
+}
 
 // =============================================================================
 // PARSING FUNCTIONS
@@ -138,15 +171,27 @@ function extractReleaseModifierFromStart(text: string): { modifier: string | nul
   const sortedModifiers = [...RELEASE_MODIFIERS].sort((a, b) => b.length - a.length);
 
   for (const mod of sortedModifiers) {
-    const regex = new RegExp(`^${mod.replace(/\s/g, '\\s+')}\\s+`, 'i');
+    const escaped = mod.replace(/\s/g, '\\s+').replace(/-/g, '\\-');
+    const regex = new RegExp(`^${escaped}\\s+`, 'i');
     if (regex.test(text)) {
       const remaining = text.replace(regex, '').trim();
-      if (remaining && (!/^\d/.test(remaining) || /^\d-/.test(remaining) || /^\w+$$/.test(remaining) || /^[A-Za-z]/.test(remaining))) {
-        return {
-          modifier: mod,
-          remaining: remaining
-        };
-      }
+      if (!remaining) continue;
+
+      // Accept if remaining looks like an ingredient or chains into another modifier
+      const looksValid =
+        /^[A-Za-z]/.test(remaining) ||
+        /^\d-/.test(remaining) ||
+        // Chained: another release modifier follows
+        sortedModifiers.some(m => {
+          const e = m.replace(/\s/g, '\\s+').replace(/-/g, '\\-');
+          return new RegExp(`^${e}\\s+`, 'i').test(remaining);
+        }) ||
+        // Chained: a duration modifier follows
+        DURATION_MODIFIERS.some(m => {
+          return new RegExp(`^${m.replace(/\s/g, '\\s+')}\\s+`, 'i').test(remaining);
+        });
+
+      if (looksValid) return { modifier: mod, remaining };
     }
   }
   return { modifier: null, remaining: text };
@@ -166,19 +211,15 @@ function cleanBrandContent(brandText: string, alreadyExtracted: string[] = []): 
   if (!text) return { brand: null, extraDose: null, extraModifiers: [] };
 
   let remainingText = text;
-  let extractedModifier = null;
 
-  do {
+  while (true) {
     const result = extractReleaseModifierFromStart(remainingText);
-    extractedModifier = result.modifier;
-    if (extractedModifier && !alreadyExtracted.includes(extractedModifier)) {
-      extraModifiers.push(extractedModifier);
-      remainingText = result.remaining;
-    } else if (extractedModifier) {
-      remainingText = result.remaining;
-      extractedModifier = null;
+    if (!result.modifier) break;
+    if (!alreadyExtracted.includes(result.modifier)) {
+      extraModifiers.push(result.modifier);
     }
-  } while (extractedModifier);
+    remainingText = result.remaining;
+  }
 
   const doseMatch = remainingText.match(/^(\d+(?:\.\d+)?)\s*(ACTUAT|CELLS(?:\/ML)?|MG(?:,)?)\s+(.+)$/i);
   if (doseMatch) {
@@ -262,8 +303,7 @@ function processBracketContent(
 
   if (!doseBeforeBracket) {
     const { modifier: bracketDurationMod, cleanName: cleanedBracket1 } = extractDurationModifier(bracketContent);
-    const { modifier: bracketReleaseMod, cleanName: cleanedBracket2 } = extractReleaseModifierFromStart(cleanedBracket1 || bracketContent);
-    
+    const { modifier: bracketReleaseMod, remaining: cleanedBracket2 } = extractReleaseModifierFromStart(cleanedBracket1 || bracketContent);
     const finalBracketContent = cleanedBracket2 || cleanedBracket1 || bracketContent;
     const extractedModifiers: string[] = [];
     if (bracketReleaseMod) extractedModifiers.push(bracketReleaseMod);
@@ -579,7 +619,7 @@ function reformatSBDName(name: string, debug: boolean = false): string | null {
     console.log(`   📝 After duration extraction: "${nameAfterDuration}"`);
   }
 
-  const { brand, ingredient: extractedIngredient, extraDose, extraModifiers, cleanName: nameAfterBrand, durationModifier: bracketDurationMod } = extractBrand(nameAfterDuration);
+  let { brand, ingredient: extractedIngredient, extraDose, extraModifiers, cleanName: nameAfterBrand, durationModifier: bracketDurationMod } = extractBrand(nameAfterDuration);
   if (!brand) {
     if (debug) console.log(`   ❌ No brand found`);
     return null;
@@ -592,24 +632,54 @@ function reformatSBDName(name: string, debug: boolean = false): string | null {
     console.log(`   📝 After brand extraction: "${nameAfterBrand}"`);
   }
 
+  // Extract any leading release modifiers from nameAfterBrand
+  // (handles cases like "3-Bead 24 HR amphetamine ... [Mydayis]" where
+  // modifiers appear before the ingredient and the brand is at the end)
+  const leadingReleaseMods: string[] = [];
+  let workingNameAfterBrand = nameAfterBrand;
+  while (true) {
+    const sortedMods = [...RELEASE_MODIFIERS].sort((a, b) => b.length - a.length);
+    let found: string | null = null;
+    for (const mod of sortedMods) {
+      const escaped = mod.replace(/\s/g, '\\s+').replace(/-/g, '\\-');
+      const regex = new RegExp(`^${escaped}\\s+`, 'i');
+      if (regex.test(workingNameAfterBrand)) {
+        found = mod;
+        workingNameAfterBrand = workingNameAfterBrand.replace(regex, '').trim();
+        break;
+      }
+    }
+    if (!found) break;
+    leadingReleaseMods.push(found);
+  }
+
+  if (leadingReleaseMods.length > 0) {
+    extraModifiers = [...leadingReleaseMods, ...extraModifiers];
+    nameAfterBrand = workingNameAfterBrand;
+    if (debug) {
+      console.log(`   ✅ Leading release modifiers from nameAfterBrand: [${leadingReleaseMods.join(', ')}]`);
+      console.log(`   📝 nameAfterBrand after leading-mod extraction: "${nameAfterBrand}"`);
+    }
+  }
+
   if (nameAfterBrand.includes('[') && nameAfterBrand.includes(']') && nameAfterBrand.includes(' / ')) {
     if (!extractedIngredient && !extraDose) {
       let result = nameAfterBrand;
+      if (extraModifiers.length > 0) result += ' ' + extraModifiers.join(' ');
       if (durationMod) result += ` ${durationMod}`;
       if (debug) console.log(`   ✅ Final Result: "${result}"`);
-      return result;
+      return applyInjectableDoseCalculation(result);
     }
   }
 
   if (extraDose && !extractedIngredient) {
     if (debug) console.log(`   🔄 Detected brand-first format with dose in bracket`);
-
     const result = parseBrandFirstFormat(brand, extraDose, extraModifiers, nameAfterBrand);
     if (result) {
       let finalResult = result;
       if (durationMod) finalResult += ` ${durationMod}`;
       if (debug) console.log(`   ✅ Final Result: "${finalResult}"`);
-      return finalResult;
+      return applyInjectableDoseCalculation(finalResult);
     }
   }
 
@@ -644,7 +714,6 @@ function reformatSBDName(name: string, debug: boolean = false): string | null {
       }
 
       let result = `${brand} [${cleanIngredients.join(' / ')}] ${parsed.doses} ${doseForm}`;
-
       const allModifiers = [...extraModifiers, ...parsed.modifiers];
       if (allModifiers.length > 0) result += ' ' + allModifiers.join(' ');
       if (container) result += ` ${container}`;
@@ -653,7 +722,7 @@ function reformatSBDName(name: string, debug: boolean = false): string | null {
       if (extraDose) result += ` ${extraDose}`;
 
       if (debug) console.log(`   ✅ Result: "${result}"`);
-      return result;
+      return applyInjectableDoseCalculation(result);   // CHANGED
     }
     if (debug) console.log(`   ⚠️ Combo parsing failed, trying single-ingredient logic`);
   }
@@ -718,8 +787,8 @@ function reformatSBDName(name: string, debug: boolean = false): string | null {
   if (extraDose) result += ` ${extraDose}`;
 
   if (debug) console.log(`   ✅ Final Result: "${result}"`);
-  return result;
-}
+  return applyInjectableDoseCalculation(result);
+  }
 
 // =============================================================================
 // TEST CASES
@@ -732,7 +801,6 @@ function runTests(): void {
     { input: '12 HR carbamazepine 200 MG Extended Release Oral Capsule [Equetro]', expected: 'Equetro [carbamazepine] 200 MG Extended Release Oral Capsule 12 HR' },
     { input: 'chlorambucil 2 MG Oral Tablet [Leukeran]', expected: 'Leukeran [chlorambucil] 2 MG Oral Tablet' },
     { input: 'acetaminophen 325 MG / oxycodone 5 MG Oral Tablet [Percocet]', expected: 'Percocet [acetaminophen / oxycodone] 325 MG / 5 MG Oral Tablet' },
-    { input: '0.1 ML adalimumab 100 MG/ML Prefilled Syringe [Humira]', expected: 'Humira [adalimumab] 100 MG/ML Prefilled Syringe 0.1 ML' },
     { input: '26 ML ustekinumab 5 MG/ML Injection [Stelara]', expected: 'Stelara [ustekinumab] 5 MG/ML Injection 26 ML' },
     { input: 'NDA020983 200 ACTUAT albuterol 0.09 MG/ACTUAT Metered Dose Inhaler [Ventolin]', expected: 'Ventolin [albuterol] 0.09 MG/ACTUAT Metered Dose Inhaler 200 ACTUAT' },
     { input: 'ProAir [NDA021457 200 ACTUAT albuterol] 0.09 MG/ACTUAT Metered Dose Inhaler', expected: 'ProAir [albuterol] 0.09 MG/ACTUAT Metered Dose Inhaler 200 ACTUAT' },
@@ -755,6 +823,17 @@ function runTests(): void {
     { input: 'Preservative-Free timolol 5 MG/ML Ophthalmic Solution [Timoptic]', expected: 'Timoptic [timolol] 5 MG/ML Ophthalmic Solution Preservative-Free' },
     { input: 'Once-Daily clindamycin 0.01 MG/MG Topical Gel [Clindagel]', expected: 'Clindagel [clindamycin] 0.01 MG/MG Topical Gel Once-Daily' },
     { input: 'acetaminophen 325 MG Oral Tablet', expected: null },
+    { input: '0.1 ML adalimumab 100 MG/ML Prefilled Syringe [Humira]', expected: 'Humira [adalimumab] 10 MG (100 MG/ML) Prefilled Syringe 0.1 ML' },
+    { input: '0.8 ML adalimumab 100 MG/ML Prefilled Syringe [Humira]', expected: 'Humira [adalimumab] 80 MG (100 MG/ML) Prefilled Syringe 0.8 ML' },
+    { input: '0.4 ML adalimumab 100 MG/ML Auto-Injector [Humira]', expected: 'Humira [adalimumab] 40 MG (100 MG/ML) Auto-Injector 0.4 ML' },
+    { input: '0.8 ML adalimumab 50 MG/ML Prefilled Syringe [Humira]', expected: 'Humira [adalimumab] 40 MG (50 MG/ML) Prefilled Syringe 0.8 ML' },
+    { input: '0.8 ML adalimumab-aaty 100 MG/ML Auto-Injector [Yuflyma]', expected: 'Yuflyma [adalimumab-aaty] 80 MG (100 MG/ML) Auto-Injector 0.8 ML' },
+    { input: 'Humira [adalimumab] 100 MG/ML Prefilled Syringe 0.8 ML', expected: 'Humira [adalimumab] 80 MG (100 MG/ML) Prefilled Syringe 0.8 ML' },
+    { input: '0.05 ML aflibercept-ayyh 40 MG/ML Prefilled Syringe [Eylea HD]', expected: 'Eylea HD [aflibercept-ayyh] 2 MG (40 MG/ML) Prefilled Syringe 0.05 ML' },
+    { input: '26 ML ustekinumab 5 MG/ML Injection [Stelara]', expected: 'Stelara [ustekinumab] 5 MG/ML Injection 26 ML' },
+    { input: 'Ozempic [0.25 MG,] 0.5 MG Dose 1.5 ML semaglutide 1.34 MG/ML Pen Injector', expected: 'Ozempic [semaglutide] 1.34 MG/ML Pen Injector 0.25 MG 0.5 MG Dose 1.5 ML' },
+    { input: 'Mydayis [3-Bead 24 HR amphetamine aspartate / amphetamine sulfate / dextroamphetamine saccharate / dextroamphetamine sulfate] 3.125 MG / 3.125 MG / 3.125 MG / 3.125 MG Extended Release Oral Capsule', expected: 'Mydayis [amphetamine aspartate / amphetamine sulfate / dextroamphetamine saccharate / dextroamphetamine sulfate] 3.125 MG / 3.125 MG / 3.125 MG / 3.125 MG Extended Release Oral Capsule 3-Bead 24 HR' },
+    { input: '3-Bead 24 HR amphetamine aspartate 3.125 MG Extended Release Oral Capsule [Mydayis]', expected: 'Mydayis [amphetamine aspartate] 3.125 MG Extended Release Oral Capsule 3-Bead 24 HR' },
   ];
 
   let passed = 0, failed = 0;

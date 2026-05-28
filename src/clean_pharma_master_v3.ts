@@ -10,6 +10,8 @@ const SPACE_ID = process.env.GEO_SPACE_ID;
 const FORCE_DELETE = process.argv.includes('--force');
 const DRY_RUN = process.argv.includes('--dry-run');
 const SKIP_SCD = process.argv.includes('--skip-scd');  // NEW: Skip SCD flag
+const SKIP_GPCK = process.argv.includes('--skip-gpck');   // ADD
+const SKIP_BPCK = process.argv.includes('--skip-bpck'); 
 
 const TARGET_PER_TYPE = 20000; // Accumulate this many per type, then delete
 
@@ -22,6 +24,8 @@ const PHARMA_TYPES = [
   { id: TYPE_IDS.SBD, name: 'SBD' },
   { id: TYPE_IDS.MIN, name: 'MIN' },
   { id: TYPE_IDS.PIN, name: 'PIN' },
+  ...(SKIP_GPCK ? [] : [{ id: TYPE_IDS.GPCK, name: 'GPCK' }]),
+  ...(SKIP_BPCK ? [] : [{ id: TYPE_IDS.BPCK, name: 'BPCK' }]),
   { id: TYPE_IDS.NDC, name: 'NDC' },
 ];
 
@@ -190,6 +194,8 @@ async function runDelete() {
   console.log(`📋 Mode: ${DRY_RUN ? 'DRY RUN' : 'DELETE'}`);
   // NEW: Indicate if SCDs are being skipped
   if (SKIP_SCD) console.log(`⏭️ SCD: SKIPPED (use --skip-scd to bypass stuck SCDs)`);
+  if (SKIP_GPCK) console.log(`⏭️  GPCK: SKIPPED`);
+  if (SKIP_BPCK) console.log(`⏭️  BPCK: SKIPPED`);
   console.log(`🎯 Accumulate ${TARGET_PER_TYPE} per type\n`);
 
   let grandTotal = 0;

@@ -22,6 +22,8 @@ Geo Health Space - RxNorm RxCUI Ingestion Ontology
 | Multiple Ingredient (MIN)    | `f0250a1cc9e8431980b3e9d7661e08f9` |
 | Precise Ingredient (PIN)     | `4ba36be2740b4f36aa7c31512869bb3c` |
 | NDC                          | `285d054d3b524cd2bce119f2d796b259` |
+| Brand Pack                   | `78adf4017a5745e5a024771ae123d77b` |
+| Generic Pack                 | `c71ac4f342354c1d82da3ccfae274786` |
 
 ## Relations
 
@@ -35,6 +37,8 @@ Geo Health Space - RxNorm RxCUI Ingestion Ontology
 | Precise Ingredients     | `5d5602ac0fe64f4dbdc345c0bdf09d72` |
 | NDCs                    | `199c04685b3c49d3b09cdb32a40459cc` |
 | Ingredients             | `42f9691bb3334c058553ab74c5fa4016` |
+| Brand Packs             | `80913eb0c104490391bfbfe25ef71e7c` |
+| Generic Packs           | `3490c0442f3e49819cde4293356d89e2` |
 
 ## Properties
 
@@ -71,11 +75,11 @@ Geo Health Space - RxNorm RxCUI Ingestion Ontology
 
 ### Semantic Clinical Drug (SCD)
 - Properties: Name, RxCUI
-- Relations: NDCs
+- Relations: NDCs, Generic Packs
 
 ### Semantic Branded Drug (SBD)
 - Properties: Name, RxCUI
-- Relations: NDCs, Brand Names
+- Relations: NDCs, Brand Names, Brand Packs
 
 ### Precise Ingredient (PIN)
 - Properties: Name, RxCUI
@@ -84,3 +88,11 @@ Geo Health Space - RxNorm RxCUI Ingestion Ontology
 ### NDC
 - Properties: Name, NDC10, NDC11, SPL Set ID, NADAC Unit Price, Cost Plus Unit Price
 - Relations: Link to from SCD, SBD
+
+### Brand Pack (BPCK)
+- Properties: Name, RxCUI
+- Relations: NDCs
+
+### Generic Pack (GPCK)
+- Properties: Name, RxCUI
+- Relations: NDCs

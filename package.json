@@ -1,16 +1,22 @@
 {
   "name": "pharma-graph-ingestor",
-  "version": "1.0.0",
-  "description": "Ingests RxNorm pharma data into the Geo Knowledge Graph.",
+  "version": "2.2.0",
+  "description": "Ingests RxNorm and Canadian pharma data into the Geo Knowledge Graph.",
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "import": "tsx src/import_extracted_data_v10.ts",
-    "import:dist": "node dist/import_extracted_data_v10.js ",
-    "rollback": "tsx src/rollback_selective_bulk.ts",
-    "rollback:dist": "node dist/rollback_selective_bulk.js",
-    "clean_all": "tsx src/clean_pharma_master_v2.ts",
-    "clean_all:dist": "node dist/clean_pharma_master_v2.js"
+    "import": "tsx src/import_extracted_data_v11.ts",
+    "import_dist": "node dist/import_extracted_data_v11.js",
+    "import_canada": "tsx canada/src/import_canadian_drugs_v1.ts",
+    "import_canada_dist": "node canada/dist/import_canadian_drugs_v1.js",
+    "rollback": "tsx src/rollback_selective_bulk_v2.ts",
+    "rollback_dist": "node dist/rollback_selective_bulk_v2.js",
+    "rollback_canada": "tsx canada/src/rollback_canada_v1.ts",
+    "rollback_canada_dist": "node canada/dist/rollback_canada_v1.js",
+    "clean": "tsx src/clean_pharma_master_v3.ts",
+    "clean_dist": "node dist/clean_pharma_master_v3.js",
+    "clean_canada": "tsx canada/src/clean_canada_data.ts",
+    "clean_canada_dist": "node canada/dist/clean_canada_data.js"
   },
   "dependencies": {
     "@geoprotocol/geo-sdk": "0.17.0",

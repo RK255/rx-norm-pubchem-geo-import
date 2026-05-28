@@ -8,6 +8,8 @@ export const TYPE_IDS = {
   MIN: 'f0250a1cc9e8431980b3e9d7661e08f9',
   PIN: '4ba36be2740b4f36aa7c31512869bb3c',
   NDC: '285d054d3b524cd2bce119f2d796b259',
+  BPCK: '78adf4017a5745e5a024771ae123d77b',
+  GPCK: 'c71ac4f342354c1d82da3ccfae274786',
 } as const;
 
 export const RELATION_IDS = {
@@ -19,6 +21,8 @@ export const RELATION_IDS = {
   PRECISE_INGREDIENTS: '5d5602ac0fe64f4dbdc345c0bdf09d72',
   NDCS: '199c04685b3c49d3b09cdb32a40459cc',
   INGREDIENTS: '42f9691bb3334c058553ab74c5fa4016',
+  GENERIC_PACKS: '3490c0442f3e49819cde4293356d89e2',
+  BRAND_PACKS: '80913eb0c104490391bfbfe25ef71e7c',
 } as const;
 
 export const PROPERTY_IDS = {

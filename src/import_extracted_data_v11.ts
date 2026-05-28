@@ -1,5 +1,5 @@
-// src/import_extracted_data_v10.ts
-// V10: Full PIN nesting support - uses ONLY existing relation IDs
+// src/import_extracted_data_v11.ts
+// V11: Full PIN nesting support - Add BPCK + GPCK support
 // Change: PIN children use same relation types as IN children (nesting via source entity, not relation UUID)
 
 import 'dotenv/config';
@@ -20,7 +20,7 @@ const __dirname = path.dirname(__filename);
 // =============================================================================
 const DATA_DIR = path.join(__dirname, '..', 'data_to_publish');
 const DAO_MANIFEST_DIR = path.join(DATA_DIR, 'DAO_manifests');
-const MASTER_FILE = path.join(DATA_DIR, 'full_geo_extraction_v22.2.jsonl');
+const MASTER_FILE = path.join(DATA_DIR, 'full_geo_extraction_v23.jsonl');
 const API_URL = "https://testnet-api.geobrowser.io/graphql";
 
 const BATCH_SIZE_PERSONAL = 80000;
@@ -77,6 +77,8 @@ const TYPE_NAMES: Record<string, string> = {
   [TYPE_IDS.MIN]: 'MIN',
   [TYPE_IDS.PIN]: 'PIN',
   [TYPE_IDS.NDC]: 'NDC',
+  [TYPE_IDS.GPCK]: 'GPCK',
+  [TYPE_IDS.BPCK]: 'BPCK',
 };
 
 // =============================================================================
@@ -140,6 +142,8 @@ async function fetchExistingEntityIds(spaceId: string): Promise<Set<string>> {
     { id: TYPE_IDS.MIN, name: 'MIN', short: 'MIN' },
     { id: TYPE_IDS.PIN, name: 'PIN', short: 'PIN' },
     { id: TYPE_IDS.NDC, name: 'NDC', short: 'NDC' },
+    { id: TYPE_IDS.GPCK, name: 'GPCK', short: 'GPCK' },
+    { id: TYPE_IDS.BPCK, name: 'BPCK', short: 'BPCK' },
   ];
 
   for (const type of typeIds) {
@@ -373,15 +377,15 @@ async function publishInBatches(
 }
 
 // =============================================================================
-// MAIN IMPORT (V10 - Only existing relation IDs)
+// MAIN IMPORT (V11 - Only existing relation IDs)
 // =============================================================================
 async function runImport() {
   const rxcuiStr = TARGET_RXCUIS ? ` (${TARGET_RXCUIS.join(', ')})` : '';
   const limitStr = INGREDIENT_LIMIT ? ` [limit: ${INGREDIENT_LIMIT}]` : '';
   const nameStr = PROPOSAL_NAME ? ` [name: "${PROPOSAL_NAME}"]` : '';
   
-  console.log(`\n🚀 Geo Import v10${rxcuiStr}${limitStr}${nameStr}`);
-  console.log(`   🧬 PIN-nested biosimilars (existing relation IDs only)`);
+  console.log(`\n🚀 Geo Import v11${rxcuiStr}${limitStr}${nameStr}`);
+  console.log(`   🧬 PIN-nested biosimilars + GPCK/BPCK pack entities`);
   if (SET_ID_ONLY) console.log('   🧩 Filter: NDCs with SPL_SET_ID only');
   if (PRICING_ONLY) console.log('   💰 Filter: NDCs with pricing data only');
   if (DRY_RUN) console.log('   🔍 DRY RUN');
@@ -488,27 +492,34 @@ async function runImport() {
         const scdId = generateUuid(scd.rxcui, TYPE_IDS.SCD);
         const scdEntity = getEntity(scdId, TYPE_IDS.SCD, scd.rxcui, scd.name, entityMap);
         addRelation(minEntity, RELATION_IDS.SEMANTIC_CLINICAL_DRUGS, scdId);
-        
+        filteredNdcCount += processGpck(scdEntity, scd, entityMap, SET_ID_ONLY, PRICING_ONLY);
+
         (scd.ndcs || []).forEach((ndc: any) => {
           const ndcEnt = createNdcEntity(ndc, entityMap, SET_ID_ONLY, PRICING_ONLY);
           if (ndcEnt) addRelation(scdEntity, RELATION_IDS.NDCS, ndcEnt.id);
           else filteredNdcCount++;
         });
       });
-
       (min.combo_sbds || []).forEach((sbd: any) => {
         const sbdId = generateUuid(sbd.rxcui, TYPE_IDS.SBD);
         const sbdEntity = getEntity(sbdId, TYPE_IDS.SBD, sbd.rxcui, sbd.name, entityMap);
         addRelation(minEntity, RELATION_IDS.SEMANTIC_BRANDED_DRUGS, sbdId);
-        
+
         (sbd.ndcs || []).forEach((ndc: any) => {
           const ndcEnt = createNdcEntity(ndc, entityMap, SET_ID_ONLY, PRICING_ONLY);
           if (ndcEnt) addRelation(sbdEntity, RELATION_IDS.NDCS, ndcEnt.id);
           else filteredNdcCount++;
         });
-      });
-    });
 
+        if (sbd.brand_name) {
+          const bnId = generateUuid(sbd.brand_name.rxcui, TYPE_IDS.BN);
+          getEntity(bnId, TYPE_IDS.BN, sbd.brand_name.rxcui, sbd.brand_name.name, entityMap);
+          addRelation(sbdEntity, RELATION_IDS.BRAND_NAMES, bnId);
+        }
+        filteredNdcCount += processBpck(sbdEntity, sbd, entityMap, SET_ID_ONLY, PRICING_ONLY);
+      });
+      });
+      
     // V10: FLAT PIN processing (legacy v21 format - empty PINs)
     (connections.pin || []).forEach((pin: any) => {
       if (pin.scd?.length || pin.sbd?.length || pin.bn?.length || pin.df?.length) {
@@ -520,7 +531,7 @@ async function runImport() {
       addRelation(ingEntity, RELATION_IDS.PRECISE_INGREDIENTS, pinId);
     });
 
-    // V10: NESTED PIN processing (v22 format with biosimilars)
+    // V10: NESTED PIN processing (v23 PIN-nested biosimilars + GPCK/BPCK pack entities)
     // Uses EXISTING relation IDs - nesting via source entity, not relation type
     (connections.pin || []).forEach((pin: any) => {
       if (!pin.scd?.length && !pin.sbd?.length && !pin.bn?.length && !pin.df?.length) {
@@ -539,7 +550,8 @@ async function runImport() {
         const scdId = generateUuid(scd.rxcui, TYPE_IDS.SCD);
         const scdEntity = getEntity(scdId, TYPE_IDS.SCD, scd.rxcui, scd.name, entityMap);
         addRelation(pinEntity, RELATION_IDS.SEMANTIC_CLINICAL_DRUGS, scdId);
-        
+        filteredNdcCount += processGpck(scdEntity, scd, entityMap, SET_ID_ONLY, PRICING_ONLY);
+
         (scd.ndcs || []).forEach((ndc: any) => {
           const ndcEnt = createNdcEntity(ndc, entityMap, SET_ID_ONLY, PRICING_ONLY);
           if (ndcEnt) addRelation(scdEntity, RELATION_IDS.NDCS, ndcEnt.id);
@@ -553,20 +565,27 @@ async function runImport() {
         const bnEntity = getEntity(bnId, TYPE_IDS.BN, bn.rxcui, bn.name, entityMap);
         addRelation(pinEntity, RELATION_IDS.BRAND_NAMES, bnId);
       });
-      
+
       // PIN → SBD (same relation type as IN → SBD: SEMANTIC_BRANDED_DRUGS)
       (pin.sbd || []).forEach((sbd: any) => {
         const sbdId = generateUuid(sbd.rxcui, TYPE_IDS.SBD);
         const sbdEntity = getEntity(sbdId, TYPE_IDS.SBD, sbd.rxcui, sbd.name, entityMap);
         addRelation(pinEntity, RELATION_IDS.SEMANTIC_BRANDED_DRUGS, sbdId);
-        
+        filteredNdcCount += processBpck(sbdEntity, sbd, entityMap, SET_ID_ONLY, PRICING_ONLY);
+
         (sbd.ndcs || []).forEach((ndc: any) => {
           const ndcEnt = createNdcEntity(ndc, entityMap, SET_ID_ONLY, PRICING_ONLY);
           if (ndcEnt) addRelation(sbdEntity, RELATION_IDS.NDCS, ndcEnt.id);
           else filteredNdcCount++;
         });
+
+        if (sbd.brand_name) {
+          const bnId = generateUuid(sbd.brand_name.rxcui, TYPE_IDS.BN);
+          getEntity(bnId, TYPE_IDS.BN, sbd.brand_name.rxcui, sbd.brand_name.name, entityMap);
+          addRelation(sbdEntity, RELATION_IDS.BRAND_NAMES, bnId);
+        }
       });
-      
+
       // PIN → DF (same relation type as IN → DF: DOSE_FORMS)
       (pin.df || []).forEach((df: any) => {
         const dfId = generateUuid(df.rxcui, TYPE_IDS.DF);
@@ -587,6 +606,7 @@ async function runImport() {
       const scdId = generateUuid(scd.rxcui, TYPE_IDS.SCD);
       const scdEntity = getEntity(scdId, TYPE_IDS.SCD, scd.rxcui, scd.name, entityMap);
       addRelation(ingEntity, RELATION_IDS.SEMANTIC_CLINICAL_DRUGS, scdId);
+      filteredNdcCount += processGpck(scdEntity, scd, entityMap, SET_ID_ONLY, PRICING_ONLY);
 
       (scd.ndcs || []).forEach((ndc: any) => {
         const ndcEnt = createNdcEntity(ndc, entityMap, SET_ID_ONLY, PRICING_ONLY);
@@ -600,6 +620,7 @@ async function runImport() {
       const sbdId = generateUuid(sbd.rxcui, TYPE_IDS.SBD);
       const sbdEntity = getEntity(sbdId, TYPE_IDS.SBD, sbd.rxcui, sbd.name, entityMap);
       addRelation(ingEntity, RELATION_IDS.SEMANTIC_BRANDED_DRUGS, sbdId);
+      filteredNdcCount += processBpck(sbdEntity, sbd, entityMap, SET_ID_ONLY, PRICING_ONLY);
 
       (sbd.ndcs || []).forEach((ndc: any) => {
         const ndcEnt = createNdcEntity(ndc, entityMap, SET_ID_ONLY, PRICING_ONLY);
@@ -623,12 +644,45 @@ async function runImport() {
       }
     });
   });
+  
+  // Explicit pass: MIN combo SBD brand names
+  for (const ing of ingredientsToImport) {
+    for (const min of (ing.connections?.min || [])) {
+      for (const sbd of (min.combo_sbds || [])) {
+        if (!sbd.brand_name) continue;
+        const sbdId = generateUuid(sbd.rxcui, TYPE_IDS.SBD);
+        const sbdEntity = entityMap.get(sbdId);
+        if (!sbdEntity) continue;
+        const bnId = generateUuid(sbd.brand_name.rxcui, TYPE_IDS.BN);
+        getEntity(bnId, TYPE_IDS.BN, sbd.brand_name.rxcui, sbd.brand_name.name, entityMap);
+        addRelation(sbdEntity, RELATION_IDS.BRAND_NAMES, bnId);
+      }
+    }
+  }
 
   if (filteredNdcCount > 0) {
     console.log(`   Filtered out ${filteredNdcCount.toLocaleString()} NDCs`);
   }
   console.log(`   ${pinNestedCount} PINs with nested biosimilars\n`);
 
+
+
+  // EXPLICIT PASS: MIN combo SBD brand names + direct MIN->BN
+  for (const ing of ingredientsToImport) {
+    for (const min of (ing.connections?.min || [])) {
+      const minId = generateUuid(min.rxcui, TYPE_IDS.MIN);
+      const minEntity = entityMap.get(minId);
+      for (const sbd of (min.combo_sbds || [])) {
+        if (!sbd.brand_name) continue;
+        const sbdId = generateUuid(sbd.rxcui, TYPE_IDS.SBD);
+        const sbdEntity = entityMap.get(sbdId);
+        const bnId = generateUuid(sbd.brand_name.rxcui, TYPE_IDS.BN);
+        getEntity(bnId, TYPE_IDS.BN, sbd.brand_name.rxcui, sbd.brand_name.name, entityMap);
+        if (sbdEntity) addRelation(sbdEntity, RELATION_IDS.BRAND_NAMES, bnId);
+        if (minEntity) addRelation(minEntity, RELATION_IDS.BRAND_NAMES, bnId);
+      }
+    }
+  }
   const allEntities = Array.from(entityMap.values());
   const newEntities: Entity[] = [];
   let skippedRelations = 0;
@@ -764,6 +818,38 @@ async function runImport() {
   }
 
   await publishInBatches(allOps, spaceInfo, spaceId, smartAccount, personalSpaceId, TARGET_RXCUIS, PROPOSAL_NAME);
+}
+// =============================================================================
+// PACK HELPERS
+// =============================================================================
+function processGpck(scdEntity: Entity, scd: any, entityMap: Map<string, Entity>, SET_ID_ONLY: boolean, PRICING_ONLY: boolean): number {
+  let filtered = 0;
+  for (const pack of (scd.gpck || [])) {
+    const packId = generateUuid(pack.rxcui, TYPE_IDS.GPCK);
+    const packEntity = getEntity(packId, TYPE_IDS.GPCK, pack.rxcui, pack.name, entityMap);
+    addRelation(scdEntity, RELATION_IDS.GENERIC_PACKS, packId);
+    for (const ndc of (pack.ndcs || [])) {
+      const ndcEnt = createNdcEntity(ndc, entityMap, SET_ID_ONLY, PRICING_ONLY);
+      if (ndcEnt) addRelation(packEntity, RELATION_IDS.NDCS, ndcEnt.id);
+      else filtered++;
+    }
+  }
+  return filtered;
+}
+
+function processBpck(sbdEntity: Entity, sbd: any, entityMap: Map<string, Entity>, SET_ID_ONLY: boolean, PRICING_ONLY: boolean): number {
+  let filtered = 0;
+  for (const pack of (sbd.bpck || [])) {
+    const packId = generateUuid(pack.rxcui, TYPE_IDS.BPCK);
+    const packEntity = getEntity(packId, TYPE_IDS.BPCK, pack.rxcui, pack.name, entityMap);
+    addRelation(sbdEntity, RELATION_IDS.BRAND_PACKS, packId);
+    for (const ndc of (pack.ndcs || [])) {
+      const ndcEnt = createNdcEntity(ndc, entityMap, SET_ID_ONLY, PRICING_ONLY);
+      if (ndcEnt) addRelation(packEntity, RELATION_IDS.NDCS, ndcEnt.id);
+      else filtered++;
+    }
+  }
+  return filtered;
 }
 
 runImport().catch(console.error);

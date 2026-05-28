@@ -11,6 +11,7 @@ const __dirname = path.dirname(__filename);
 
 const API_URL = "https://testnet-api.geobrowser.io/graphql";
 const TARGET_OPS_PER_BATCH = 80000;
+const SPLIT_THRESHOLD = 2000; // Don't split batches below this threshold
 
 const args = process.argv.slice(2);
 const HARD_DELETE = args.includes('--hard');
@@ -112,7 +113,6 @@ async function runRollback() {
         results.forEach(r => { if (r?.ops) rollbackOps.push(...r.ops); });
       } else {
         // Strip properties (soft rollback)
-        // TODO: Add property unset logic here if needed
         // For now, hard delete is safer for clean imports
         const results = await Promise.all(
           chunk.map(id => Graph.deleteEntity({ id, spaceId: envSpaceId }))
@@ -133,12 +133,21 @@ async function runRollback() {
       continue;
     }
 
-    // Split into ~2 batches if ops are too many
-    const mid = Math.ceil(rollbackOps.length / 2);
-    const publishBatches = [
-      rollbackOps.slice(0, mid),
-      rollbackOps.slice(mid)
-    ].filter(b => b.length > 0);
+    // FIXED: Don't split batches when ops are below threshold
+    let publishBatches: any[][];
+    
+    if (rollbackOps.length < SPLIT_THRESHOLD) {
+      // Single batch for small op counts
+      publishBatches = [rollbackOps];
+      console.log(`  📦 Small batch mode (${rollbackOps.length} ops < ${SPLIT_THRESHOLD} threshold)`);
+    } else {
+      // Split into ~2 batches for large op counts
+      const mid = Math.ceil(rollbackOps.length / 2);
+      publishBatches = [
+        rollbackOps.slice(0, mid),
+        rollbackOps.slice(mid)
+      ].filter(b => b.length > 0);
+    }
 
     console.log(`  Publishing ${publishBatches.length} batch(es)...`);
 
