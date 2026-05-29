@@ -60,30 +60,31 @@ Geo Health Space - RxNorm RxCUI Ingestion Ontology
 
 ### Ingredient (IN)
 - Properties: Name, RxCUI, SMILES, InChI Key, PMID, Description
-- Relations: Brand Names, Dose Forms, Semantic Clinical Drugs, Semantic Branded Drugs, Precise Ingredients, Multiple Ingredients
+- Relations: Brand Names, Dose Forms, Semantic Clinical Drugs, Semantic Branded Drugs, Precise Ingredients, Multiple Ingredients, Canadian Branded Drugs, Canadian Generic Drugs
 
 ### Multiple Ingredient (MIN)
 - Properties: Name, RxCUI
-- Relations: Multiple Ingredients, Semantic Clinical Drugs, Semantic Branded Drugs, Brand Names, Dose Forms
-
-### Brand Name (BN)
-- Properties: Name, RxCUI
-- Relations: Semantic Branded Drugs, Ingredients
-
-### Dose Form (DF)
-- Properties: Name, RxCUI
-
-### Semantic Clinical Drug (SCD)
-- Properties: Name, RxCUI
-- Relations: NDCs, Generic Packs
-
-### Semantic Branded Drug (SBD)
-- Properties: Name, RxCUI
-- Relations: NDCs, Brand Names, Brand Packs
+- Relations: Ingredients, Multiple Ingredients, Semantic Clinical Drugs, Semantic Branded Drugs, Brand Names, Dose Forms, Canadian Branded Drugs, Canadian Generic Drugs
 
 ### Precise Ingredient (PIN)
 - Properties: Name, RxCUI
-- Relations: Multiple Ingredients, Semantic Clinical Drugs, Semantic Branded Drugs, Brand Names
+- Relations: Ingredients, Multiple Ingredients, Semantic Clinical Drugs, Semantic Branded Drugs, Brand Names, Dose forms, Canadian Branded Drugs, Canadian Generic Drugs
+
+### Brand Name (BN)
+- Properties: Name, RxCUI
+- Relations: Semantic Branded Drugs, Ingredients, Multiple Ingredients, Precise Ingredients
+
+### Dose Form (DF)
+- Properties: Name, RxCUI
+- Relations: Ingredients, Multiple Ingredients, Precise Ingredients
+
+### Semantic Clinical Drug (SCD)
+- Properties: Name, RxCUI
+- Relations: NDCs, Generic Packs, Ingredients, Multiple Ingredients, Precise Ingredients
+
+### Semantic Branded Drug (SBD)
+- Properties: Name, RxCUI
+- Relations: NDCs, Brand Names, Brand Packs, Ingredients, Multiple Ingredients, Precise Ingredients
 
 ### NDC
 - Properties: Name, NDC10, NDC11, SPL Set ID, NADAC Unit Price, Cost Plus Unit Price
@@ -91,8 +92,8 @@ Geo Health Space - RxNorm RxCUI Ingestion Ontology
 
 ### Brand Pack (BPCK)
 - Properties: Name, RxCUI
-- Relations: NDCs
+- Relations: NDCs, Brand names, Dose forms, Semantic Branded Drugs
 
 ### Generic Pack (GPCK)
 - Properties: Name, RxCUI
-- Relations: NDCs
+- Relations: NDCs, Dose forms, Semantic Clinical Drugs
