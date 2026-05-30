@@ -42,18 +42,36 @@ Geo Health Space - RxNorm RxCUI Ingestion Ontology
 
 ## Properties
 
-|        Property      |                UUID                |
-|----------------------|------------------------------------|
-| Name                 | `a126ca530c8e48d5b88882c734c38935` |
-| RxCUI                | `e6c50e227460442cab646a48f235459a` |
-| SMILES               | `07bc332f2afd4e498d868f4e85ec5cc1` |
-| InChI Key            | `93d0ecbc41df4c668d2fb16172002dcb` |
-| PMID                 | `1577e86142964c9484c92cf079e330e1` |
-| NDC10                | `a7f0c739e65946d493993de764fe497e` |
-| NDC11                | `1d9b05ec0ad24423a71257f9ad2e5a26` |
-| SPL_SET_ID           | `97ad7e68cb4547b281655b9666958b45` |
-| NADAC Unit Price     | `866fe5eeda584f1aba92522cfeccfac0` |
-| Cost Plus Unit Price | `a8c3eeb8f1ba45fca53094ccbe77351d` |
+|        Property                                |                UUID                |
+|------------------------------------------------|------------------------------------|
+| Name                                           | `a126ca530c8e48d5b88882c734c38935` |
+| RxCUI                                          | `e6c50e227460442cab646a48f235459a` |
+| SMILES                                         | `07bc332f2afd4e498d868f4e85ec5cc1` |
+| InChI Key                                      | `93d0ecbc41df4c668d2fb16172002dcb` |
+| PMID                                           | `1577e86142964c9484c92cf079e330e1` |
+### NDC Properties ###
+| NDC10                                          | `a7f0c739e65946d493993de764fe497e` |
+| NDC11                                          | `1d9b05ec0ad24423a71257f9ad2e5a26` |
+| SPL_SET_ID                                     | `97ad7e68cb4547b281655b9666958b45` |
+| NADAC Unit Price                               | `866fe5eeda584f1aba92522cfeccfac0` |
+| Cost Plus Unit Price                           | `a8c3eeb8f1ba45fca53094ccbe77351d` |
+| FDA Drug Label Type                            | `a26efc874172411fb67293730e1fa19c` |
+| US Drug Labeler                                | `a1ddd4b931e743aa8a4bf3ae90dd89b5` |
+| US Drug Approval Type                          | `1064611317da4067aa77dfb62f664b93` |
+| US Drug Application Approval Number            | `42c53702bb234d549e1ca8de7d358b50` |
+| US Drug Marketing Start Date                   | `76018890666340b88ea9d3dc6b261839` |
+| Drug Marketing Status                          | `42fb2cb81aaa4c92ba95b6ae6a0b1c4f` |
+| Dosage Form Size                               | `e35a0231116744cd86ce47fada688eb7` |
+| Dosage Form Score                              | `bde08b44479e422d8948f7ffa4f4258f` |
+| Dosage Form Color                              | `35418df366654f45b2f149ab080a03d1` |
+| Dosage Form Color Description                  | `e39e964fa3fa4d76bef2ba049db30444` |
+| Dosage Form Imprint Code                       | `5e566908df1441869a1ac4b44d7f26cb` |
+| Dosage Form Shape                              | `017ab18b8a8c484a87f5d1955634ad68` |
+
+
+
+
+
 <!-- | PubChem CID | `<NEED_UUID>` | -->
 
 ## Entity Hierarchy
@@ -64,7 +82,7 @@ Geo Health Space - RxNorm RxCUI Ingestion Ontology
 
 ### Multiple Ingredient (MIN)
 - Properties: Name, RxCUI
-- Relations: Ingredients, Multiple Ingredients, Semantic Clinical Drugs, Semantic Branded Drugs, Brand Names, Dose Forms, Canadian Branded Drugs, Canadian Generic Drugs
+- Relations: Ingredients, Precise Ingredients, Semantic Clinical Drugs, Semantic Branded Drugs, Brand Names, Dose Forms, Canadian Branded Drugs, Canadian Generic Drugs
 
 ### Precise Ingredient (PIN)
 - Properties: Name, RxCUI
@@ -87,7 +105,10 @@ Geo Health Space - RxNorm RxCUI Ingestion Ontology
 - Relations: NDCs, Brand Names, Brand Packs, Ingredients, Multiple Ingredients, Precise Ingredients
 
 ### NDC
-- Properties: Name, NDC10, NDC11, SPL Set ID, NADAC Unit Price, Cost Plus Unit Price
+- Properties: Name, NDC10, NDC11, SPL Set ID, NADAC Unit Price, Cost Plus Unit Price, Drug Marketing Status,
+FDA Drug Label Type, US Drug Marketing Start Date, US Drug Application Number, US Drug Approval Type, 
+Dosage Form Size, Dosage Form Color Description, Dosage Form Imprint Code, Dosage Form Color, 
+Dosage Form Size, Dosage Form Shape, Dosage Form Score 
 - Relations: Link to from SCD, SBD
 
 ### Brand Pack (BPCK)
