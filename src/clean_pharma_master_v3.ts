@@ -97,11 +97,8 @@ async function deleteMegaBatch(entityIds: string[], typeName: string): Promise<n
 
   if (deleteOps.length === 0) return 0;
 
-  const midpoint = Math.ceil(deleteOps.length / 2);
-  const batches = [
-    deleteOps.slice(0, midpoint),
-    deleteOps.slice(midpoint)
-  ].filter(b => b.length > 0);
+  // Single batch - no splitting
+  const batches = [deleteOps];
 
   console.log(`  Publishing ${batches.length} batch(es)...`);
 
@@ -109,7 +106,7 @@ async function deleteMegaBatch(entityIds: string[], typeName: string): Promise<n
     const batch = batches[i];
     try {
       const { to, calldata } = await personalSpace.publishEdit({
-        name: `Delete ${typeName} ${i + 1}/${batches.length}`,
+        name: `Delete ${typeName}`,
         spaceId: SPACE_ID,
         ops: batch,
         author: SPACE_ID,
@@ -117,11 +114,10 @@ async function deleteMegaBatch(entityIds: string[], typeName: string): Promise<n
       });
 
       const txHash = await smartAccount.sendTransaction({ to, data: calldata });
-      console.log(`  ✓ Batch ${i + 1}/${batches.length}: ${txHash.slice(0, 24)}...`);
+      console.log(`  ✓ Published: ${txHash.slice(0, 24)}...`);
       
-      if (i < batches.length - 1) await new Promise(r => setTimeout(r, 2000));
     } catch (e: any) {
-      console.error(`  ❌ Batch ${i + 1} failed:`, e.message);
+      console.error(`  ❌ Batch failed:`, e.message);
       throw e;
     }
   }

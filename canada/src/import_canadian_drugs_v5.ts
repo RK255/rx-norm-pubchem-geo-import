@@ -62,23 +62,22 @@ const PROPOSAL_NAME = (() => {
 // =============================================================================
 
 interface DinEntry {
-  din:      string;   // e.g. "02295318"
-  can_name: string;   // e.g. "atorvastatin 80 mg Tablet"
-  bc_pharmacare_unit_price?: number;
-  atc_code?:            string | null;
-  canadian_drug_labeler: string | null;
+  din:                 string;
+  bc_effective_price?: number | null;   // ← was bc_pharmacare_unit_price
+  atc_code?:           string | null;
+  company?:              string | null;   // ← maps to CANADIAN_DRUG_LABELER
 }
 
 interface ProductRecord {
-  rx_rxcui:     string;
-  rx_name:      string;
-  rx_tty:       'SCD' | 'SBD';
-  parent_rxcui: string;
-  parent_tty:   'IN' | 'MIN' | 'PIN';
-  parent_name:  string;
-  top300_rank?: number;
-  top300_drug?: string;
-  dins:         DinEntry[];
+  rxcui:         string;          // ← was rx_rxcui
+  rx_name:       string;
+  rx_tty:        'SCD' | 'SBD';
+  can_type?:     string;
+  din_count?:    number;
+  dins:          DinEntry[];
+  parent_rxcui?: string;          // optional
+  parent_tty?:   'IN' | 'MIN' | 'PIN';
+  parent_name?:  string;
 }
 
 interface CanadianEntity {
@@ -456,7 +455,7 @@ async function runImport(): Promise<void> {
   }>();
 
   for (const rec of records) {
-    const { rx_rxcui, rx_name, rx_tty, parent_rxcui, parent_tty, dins } = rec;
+    const { rxcui: rx_rxcui, rx_name, rx_tty, parent_rxcui, parent_tty, dins } = rec;
 
     const { uuid, typeId } = resolveProduct(rx_rxcui, rx_tty);
     const parentUuid       = rxnormUuid(parent_rxcui, parent_tty);
@@ -488,14 +487,18 @@ async function runImport(): Promise<void> {
 
       if (!seenIds.has(dUuidNorm)) {
         seenIds.add(dUuidNorm);
-        const dinValues: Array<{ property: string; type: string; value: string | number }> = [];
-        if (din.bc_pharmacare_unit_price !== undefined) {
-          dinValues.push({
-            property: CAN_PROPERTY_IDS.BC_PHARMACARE_UNIT_PRICE,
-            type:     'text',
-            value:    String(din.bc_pharmacare_unit_price),
-          });
-        }
+        const dinValues: Array<{ property: string; type: string; value: string }> = [];
+
+        const addProp = (propId: string, val: string | number | boolean | null | undefined) => {
+          if (val != null && val !== '') {
+            dinValues.push({ property: propId, type: 'text', value: String(val) });
+          }
+        };
+
+        // ── existing property IDs ───────────────────────────────────────────
+        addProp(CAN_PROPERTY_IDS.BC_PHARMACARE_UNIT_PRICE, din.bc_effective_price);
+        addProp(CAN_PROPERTY_IDS.ATC_CODE,                 din.atc_code);
+        addProp(CAN_PROPERTY_IDS.CANADIAN_DRUG_LABELER,    din.company);
         newEntities.push({
           id:        dUuid,
           typeId:    CAN_TYPE_IDS.DIN,

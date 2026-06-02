@@ -257,18 +257,18 @@ function createNdcEntity(ndcData: any, entityMap: Map<string, Entity>, setIdOnly
   if (ndcData.costplus_unit_price !== undefined) ndcEntity.COSTPLUS_UNIT_PRICE = ndcData.costplus_unit_price;
 
   // ── v12: 12 new NDC metadata fields ────────────────────────────────────────
-  if (ndcData.fda_drug_label_type)                    ndcEntity.FDA_DRUG_LABEL_TYPE                    = ndcData.fda_drug_label_type;
-  if (ndcData.us_drug_labeler)                        ndcEntity.US_DRUG_LABELER                        = ndcData.us_drug_labeler;
-  if (ndcData.us_drug_approval_type)                  ndcEntity.US_DRUG_APPROVAL_TYPE                  = ndcData.us_drug_approval_type;
-  if (ndcData.us_drug_application_approval_number)    ndcEntity.US_DRUG_APPLICATION_APPROVAL_NUMBER    = ndcData.us_drug_application_approval_number;
-  if (ndcData.us_drug_marketing_start_date)           ndcEntity.US_DRUG_MARKETING_START_DATE           = ndcData.us_drug_marketing_start_date;
-  if (ndcData.drug_marketing_status)                  ndcEntity.DRUG_MARKETING_STATUS                  = ndcData.drug_marketing_status;
-  if (ndcData.dosage_form_size)                       ndcEntity.DOSAGE_FORM_SIZE                       = ndcData.dosage_form_size;
-  if (ndcData.dosage_form_color_description)          ndcEntity.DOSAGE_FORM_COLOR_DESCRIPTION          = ndcData.dosage_form_color_description;
-  if (ndcData.dosage_form_shape)                      ndcEntity.DOSAGE_FORM_SHAPE                      = ndcData.dosage_form_shape;
-  if (ndcData.dosage_form_color)                      ndcEntity.DOSAGE_FORM_COLOR                      = ndcData.dosage_form_color;
-  if (ndcData.dosage_form_score)                      ndcEntity.DOSAGE_FORM_SCORE                      = ndcData.dosage_form_score;
-  if (ndcData.dosage_form_imprint_code)               ndcEntity.DOSAGE_FORM_IMPRINT_CODE               = ndcData.dosage_form_imprint_code;
+  if (ndcData.label_type)                    ndcEntity.FDA_DRUG_LABEL_TYPE                    = ndcData.label_type;
+  if (ndcData.labeler)                        ndcEntity.US_DRUG_LABELER                        = ndcData.labeler;
+  if (ndcData.approval_type)                  ndcEntity.US_DRUG_APPROVAL_TYPE                  = ndcData.approval_type;
+  if (ndcData.approval_number)    ndcEntity.US_DRUG_APPLICATION_APPROVAL_NUMBER    = ndcData.approval_number;
+  if (ndcData.marketing_start)           ndcEntity.US_DRUG_MARKETING_START_DATE           = ndcData.marketing_start;
+  if (ndcData.marketing_status)                  ndcEntity.DRUG_MARKETING_STATUS                  = ndcData.marketing_status;
+  if (ndcData.size)                       ndcEntity.DOSAGE_FORM_SIZE                       = ndcData.size;
+  if (ndcData.colortext)          ndcEntity.DOSAGE_FORM_COLOR_DESCRIPTION          = ndcData.colortext;
+  if (ndcData.shape)                      ndcEntity.DOSAGE_FORM_SHAPE                      = ndcData.shape;
+  if (ndcData.color)                      ndcEntity.DOSAGE_FORM_COLOR                      = ndcData.color;
+  if (ndcData.score)                      ndcEntity.DOSAGE_FORM_SCORE                      = ndcData.score;
+  if (ndcData.imprint)               ndcEntity.DOSAGE_FORM_IMPRINT_CODE               = ndcData.imprint;
   return ndcEntity;
 }
 

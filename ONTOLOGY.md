@@ -22,23 +22,23 @@ Geo Health Space - RxNorm RxCUI Ingestion Ontology
 | Multiple Ingredient (MIN)    | `f0250a1cc9e8431980b3e9d7661e08f9` |
 | Precise Ingredient (PIN)     | `4ba36be2740b4f36aa7c31512869bb3c` |
 | NDC                          | `285d054d3b524cd2bce119f2d796b259` |
-| Brand Pack                   | `78adf4017a5745e5a024771ae123d77b` |
-| Generic Pack                 | `c71ac4f342354c1d82da3ccfae274786` |
+| Brand Pack (BPCK)            | `78adf4017a5745e5a024771ae123d77b` |
+| Generic Pack (GPCK)          | `c71ac4f342354c1d82da3ccfae274786` |
 
 ## Relations
 
-|         Relation        |                UUID                |
-|-------------------------|------------------------------------|
-| Brand Names             | `3f30135c25394a0bb6ae429ef87337e1` |
-| Dose Forms              | `88a39df4de3542b8a6b0155750617b76` |
-| Semantic Branded Drugs  | `da89d8e2f052468f92ae5e8557ff1e78` |
-| Semantic Clinical Drugs | `c1617a1e32844adeb5ff4c4445dc2ba6` |
-| Multiple Ingredients    | `e8885ee2b8674952b2538ad4eee058e2` |
-| Precise Ingredients     | `5d5602ac0fe64f4dbdc345c0bdf09d72` |
-| NDCs                    | `199c04685b3c49d3b09cdb32a40459cc` |
-| Ingredients             | `42f9691bb3334c058553ab74c5fa4016` |
-| Brand Packs             | `80913eb0c104490391bfbfe25ef71e7c` |
-| Generic Packs           | `3490c0442f3e49819cde4293356d89e2` |
+|           Relation           |                UUID                |
+|------------------------------|------------------------------------|
+| Brand Names                  | `3f30135c25394a0bb6ae429ef87337e1` |
+| Dose Forms                   | `88a39df4de3542b8a6b0155750617b76` |
+| Semantic Branded Drugs       | `da89d8e2f052468f92ae5e8557ff1e78` |
+| Semantic Clinical Drugs      | `c1617a1e32844adeb5ff4c4445dc2ba6` |
+| Multiple Ingredients         | `e8885ee2b8674952b2538ad4eee058e2` |
+| Precise Ingredients          | `5d5602ac0fe64f4dbdc345c0bdf09d72` |
+| NDCs                         | `199c04685b3c49d3b09cdb32a40459cc` |
+| Ingredients                  | `42f9691bb3334c058553ab74c5fa4016` |
+| Brand Packs                  | `80913eb0c104490391bfbfe25ef71e7c` |
+| Generic Packs                | `3490c0442f3e49819cde4293356d89e2` |
 
 ## Properties
 
@@ -67,11 +67,6 @@ Geo Health Space - RxNorm RxCUI Ingestion Ontology
 | Dosage Form Color Description                  | `e39e964fa3fa4d76bef2ba049db30444` |
 | Dosage Form Imprint Code                       | `5e566908df1441869a1ac4b44d7f26cb` |
 | Dosage Form Shape                              | `017ab18b8a8c484a87f5d1955634ad68` |
-
-
-
-
-
 <!-- | PubChem CID | `<NEED_UUID>` | -->
 
 ## Entity Hierarchy
