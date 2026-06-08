@@ -66,11 +66,11 @@ export const CAN_PROPERTY_IDS = {
   // "CAN:CGD:" prefix used only locally as UUID seed — never published.
   RELATED_RXCUI: '88e887d0951240aa8eb2fb4a61d7d8bd',
   CANADIAN_DRUG_LABELER: '6bcb4ebd7d334048be2750800b27cb14',
-  ATC_CODE: '3796877237004803b9ebf9cca4267536'
+  ATC_CODE: '3796877237004803b9ebf9cca4267536',
   // DIN Properties
   BC_PHARMACARE_UNIT_PRICE: '22a9fba0fe754866afc0c61281d1f1ce',
   ONTARIO_ODB_UNIT_PRICE: '0a16db51be7e4e05aa4d691fe219a5e6',
-  NOVA_SCOTIA_UNIT_PRICE: '4ebc10d73d154f478d2893b1283db337'
+  NOVA_SCOTIA_UNIT_PRICE: '4ebc10d73d154f478d2893b1283db337',
 } as const;
 
 // =============================================================================

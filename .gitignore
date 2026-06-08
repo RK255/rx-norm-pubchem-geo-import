@@ -17,4 +17,4 @@ archive/
 data_to_publish/*.json
 data_to_publish/*.txt
 canada/archive/
-
+canada/data_to_publish

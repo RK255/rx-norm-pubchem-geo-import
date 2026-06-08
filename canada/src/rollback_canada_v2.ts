@@ -248,6 +248,9 @@ async function runRollback(): Promise<void> {
     }
     console.log('✅ Phase 1 complete: Entities deleted\n');
 
+    // 15-second delay before Phase 2 to allow index propagation
+    await new Promise(r => setTimeout(r, 30000));
+
     // ── PHASE 2: Cleanup Stale Relations ───────────────────────────────────
     console.log('🧹 PHASE 2: Cleaning up orphaned relations...');
     

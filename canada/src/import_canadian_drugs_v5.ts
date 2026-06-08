@@ -63,13 +63,15 @@ const PROPOSAL_NAME = (() => {
 
 interface DinEntry {
   din:                 string;
-  bc_effective_price?: number | null;   // ← was bc_pharmacare_unit_price
+  bc_effective_price?: number | null;
   atc_code?:           string | null;
-  company?:              string | null;   // ← maps to CANADIAN_DRUG_LABELER
+  company?:              string | null;   // maps to drug labeler
+  on_individual_price?: number | null;
+  ns_effective_price?:  number | null;
 }
 
 interface ProductRecord {
-  rxcui:         string;          // ← was rx_rxcui
+  rxcui:         string | null;
   rx_name:       string;
   rx_tty:        'SCD' | 'SBD';
   can_type?:     string;
@@ -113,12 +115,40 @@ function cgdUuid(rxcui: string): string        { return sha256Uuid(`CAN:CGD:${rx
 function cbdUuid(rxcui: string): string        { return sha256Uuid(`CAN:CBD:${rxcui}`); }
 function dinEntityUuid(din: string): string    { return sha256Uuid(`CAN:DIN:${din}`); }
 
+/** NEW: Deterministic UUID for parent-only Canadian matches (no RxNorm rxcui) */
+function canadianParentOnlyUuid(parentRxcui: string, canType: string, displayName: string): string {
+  const seed = `CAN-PARENT:${parentRxcui}:${canType}:${displayName.toLowerCase().trim()}`;
+  return sha256Uuid(seed);
+}
+
 function resolveProduct(
-  rxcui: string,
-  rxTty: 'SCD' | 'SBD'
-): { uuid: string; typeId: string } {
-  if (rxTty === 'SCD') return { uuid: cgdUuid(rxcui), typeId: CAN_TYPE_IDS.CGD };
-  else                 return { uuid: cbdUuid(rxcui), typeId: CAN_TYPE_IDS.CBD };
+  rxcui: string | null,
+  rxTty: 'SCD' | 'SBD' | null,
+  parentRxcui: string | null,
+  canType: string | null,
+  displayName: string,
+  din?: string
+): { uuid: string; typeId: string } | null {
+  // Exact RxNorm match: use rxcui-based UUID
+  if (rxTty === 'SCD' && rxcui) 
+    return { uuid: cgdUuid(rxcui), typeId: CAN_TYPE_IDS.CGD };
+  if (rxTty === 'SBD' && rxcui) 
+    return { uuid: cbdUuid(rxcui), typeId: CAN_TYPE_IDS.CBD };
+  
+  // Parent-only match: create Canadian-only entity using parent+type+name hash
+  if (!rxcui && parentRxcui && canType && displayName) {
+    const uuid = canadianParentOnlyUuid(parentRxcui, canType, displayName);
+    const typeId = canType === 'cSCD' ? CAN_TYPE_IDS.CGD : CAN_TYPE_IDS.CBD;
+    return { uuid, typeId };
+  }
+  
+  // Fallback: use DIN if available (shouldn't reach here if data is clean)
+  if (din) {
+    console.warn(`  Warning: Using DIN-based UUID for ${din} (no rxcui or parent)`);
+    return { uuid: dinEntityUuid(din), typeId: CAN_TYPE_IDS.CGD };
+  }
+  
+  return null; // Cannot resolve - skip this record
 }
 
 // =============================================================================
@@ -427,8 +457,8 @@ async function runImport(): Promise<void> {
     .map(l => l.trim())
     .filter(Boolean)
     .map(l => JSON.parse(l) as ProductRecord)
-    .filter(r => r.rx_tty === 'SCD' || r.rx_tty === 'SBD');
-
+    .filter(r => r.rx_tty === 'SCD' || r.rx_tty === 'SBD' || (r.rxcui === null && r.parent_rxcui));
+  
   const cgdRecords = records.filter(r => r.rx_tty === 'SCD');
   const cbdRecords = records.filter(r => r.rx_tty === 'SBD');
   const totalDins  = records.reduce((n, r) => n + (r.dins?.length ?? 0), 0);
@@ -455,28 +485,48 @@ async function runImport(): Promise<void> {
   }>();
 
   for (const rec of records) {
-    const { rxcui: rx_rxcui, rx_name, rx_tty, parent_rxcui, parent_tty, dins } = rec;
+    const { rxcui: rx_rxcui, rx_name, rx_tty, display_name, parent_rxcui, parent_tty, dins, can_type } = rec;
 
-    const { uuid, typeId } = resolveProduct(rx_rxcui, rx_tty);
-    const parentUuid       = rxnormUuid(parent_rxcui, parent_tty);
+    // NEW: Pass all required parameters including parent info for parent-only matches
+    const resolved = resolveProduct(
+      rx_rxcui, 
+      rx_tty, 
+      parent_rxcui,
+      can_type,
+      display_name || rx_name,
+      dins?.[0]?.din
+    );
+    
+    // Skip if cannot resolve UUID
+    if (!resolved) {
+      console.warn(`  Skipping unresolvable record: ${display_name || rx_name || dins?.[0]?.din} (no rxcui or parent)`);
+      continue;
+    }
+    
+    const { uuid, typeId } = resolved;
+    const parentUuid       = parent_rxcui ? rxnormUuid(parent_rxcui, parent_tty) : '';
     const uuidNorm         = uuid.replace(/-/g, '');
 
     if (seenIds.has(uuidNorm)) continue;
     seenIds.add(uuidNorm);
 
     // ── Register this product under its parent for forward anchor upsert ──
-    if (!parentChildMap.has(parentUuid)) {
-      parentChildMap.set(parentUuid, {
-        name:   rec.parent_name,
-        tty:    parent_tty,
-        typeId: RXNORM_TYPE_IDS[parent_tty],
-        cgds:   [],
-        cbds:   [],
-      });
+    // Only register if we have a valid parent
+    if (parentUuid) {
+      if (!parentChildMap.has(parentUuid)) {
+        parentChildMap.set(parentUuid, {
+          name:   rec.parent_name,
+          tty:    parent_tty,
+          typeId: RXNORM_TYPE_IDS[parent_tty],
+          cgds:   [],
+          cbds:   [],
+        });
+      }
+      const pEntry = parentChildMap.get(parentUuid)!;
+      if (typeId === CAN_TYPE_IDS.CGD) pEntry.cgds.push(uuid);
+      else if (typeId === CAN_TYPE_IDS.CBD) pEntry.cbds.push(uuid);
     }
-    const pEntry = parentChildMap.get(parentUuid)!;
-    if (rx_tty === 'SCD') pEntry.cgds.push(uuid);
-    else                   pEntry.cbds.push(uuid);
+
 
     // ── DIN entities ──────────────────────────────────────────────────────
     const dinTargets: Array<{ toEntity: string }> = [];
@@ -499,6 +549,8 @@ async function runImport(): Promise<void> {
         addProp(CAN_PROPERTY_IDS.BC_PHARMACARE_UNIT_PRICE, din.bc_effective_price);
         addProp(CAN_PROPERTY_IDS.ATC_CODE,                 din.atc_code);
         addProp(CAN_PROPERTY_IDS.CANADIAN_DRUG_LABELER,    din.company);
+        addProp(CAN_PROPERTY_IDS.ONTARIO_ODB_UNIT_PRICE,   din.on_individual_price);
+        addProp(CAN_PROPERTY_IDS.NOVA_SCOTIA_UNIT_PRICE,   din.ns_effective_price);
         newEntities.push({
           id:        dUuid,
           typeId:    CAN_TYPE_IDS.DIN,
@@ -522,7 +574,7 @@ async function runImport(): Promise<void> {
     newEntities.push({
       id:     uuid,
       typeId: typeId,
-      name:   rx_name,
+      name:   display_name || rx_name,
       values: [
         { property: CAN_PROPERTY_IDS.RELATED_RXCUI, type: 'text', value: rx_rxcui },
       ],
